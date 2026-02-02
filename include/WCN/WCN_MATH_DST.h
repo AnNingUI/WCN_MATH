@@ -159,6 +159,9 @@ void WMATH_SET(Vec3)(DST_VEC3, const float x, const float y, const float z);
 // 0
 void WMATH_ZERO(Vec3)(DST_VEC3);
 
+// 1
+void WMATH_IDENTITY(Vec3)(DST_VEC3);
+
 // ceil
 void WMATH_CEIL(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) a);
 

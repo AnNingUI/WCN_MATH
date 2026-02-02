@@ -2,6 +2,7 @@
 #define WCN_MATH_TYPES_H
 
 #include "WCN/WCN_MATH_MACROS.h"
+#include <stddef.h>
 #include <stdint.h>
 
 // TYPE

@@ -18,7 +18,7 @@ EXAMPLES_DIR = PROJECT_DIR / "examples"
 # ======================================
 # Defaults
 # ======================================
-
+is_no_dst = False
 file_name = None
 cc_compiler = "gcc"
 link_mode = "static"  # static | shared
@@ -35,6 +35,7 @@ def usage(exit_code=1):
     print("Options:")
     print("  -name       Example source file name (required)")
     print("  -cc         Compiler to use (default: gcc)")
+    print("  --no_dst    Build with NO-DST enabled")
     print("  --static    Static linking (default)")
     print("  --shared    Dynamic linking")
     print("  --help      Show this help")
@@ -69,6 +70,11 @@ while i < len(args):
         i += 1
         continue
 
+    if arg == "--dst":
+        is_no_dst = True
+        i += 1
+        continue
+
     if arg == "--static":
         link_mode = "static"
         i += 1
@@ -97,6 +103,9 @@ if not file_name:
 # Ensure main project is built
 # ======================================
 
+if is_no_dst:
+    BUILD_DIR = PROJECT_DIR / "build-no_dst"
+
 if not BUILD_DIR.exists():
     print("Main project not built. Building now...")
     BUILD_DIR.mkdir(parents=True)
@@ -110,6 +119,7 @@ else:
 # ======================================
 
 example_source = EXAMPLES_DIR / file_name
+
 if not example_source.exists():
     print(f"Error: Example file not found: {example_source}")
     sys.exit(1)

@@ -35,6 +35,10 @@ WMATH_SET(Vec3)(WMATH_TYPE(Vec3) a, float x, float y, float z) {
 WMATH_TYPE(Vec3)
 WMATH_ZERO(Vec3)() { return (WMATH_TYPE(Vec3)){.v = {0.0f, 0.0f, 0.0f}}; }
 
+// 1
+WMATH_TYPE(Vec3)
+WMATH_IDENTITY(Vec3)() { return (WMATH_TYPE(Vec3)){.v = {1.0f, 1.0f, 1.0f}}; }
+
 // ceil
 WMATH_TYPE(Vec3)
 WMATH_CEIL(Vec3)(WMATH_TYPE(Vec3) a) {

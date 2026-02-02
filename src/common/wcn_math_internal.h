@@ -12,7 +12,7 @@ extern "C" {
 
 static inline void* wcn_aligned_alloc(size_t size, size_t alignment) {
     void* ptr = NULL;
-#if defined(_MSC_VER)
+#if defined(_WIN32)
     // Windows (MSVC)
     ptr = _aligned_malloc(size, alignment);
 #else
@@ -25,7 +25,7 @@ static inline void* wcn_aligned_alloc(size_t size, size_t alignment) {
 }
 
 static inline void wcn_aligned_free(void* ptr) {
-#if defined(_MSC_VER)
+#if defined(_WIN32)
     _aligned_free(ptr);
 #else
     free(ptr);

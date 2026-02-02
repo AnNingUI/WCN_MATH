@@ -29,6 +29,10 @@ WMATH_SET(Vec3)(DST_VEC3, const float x, const float y, const float z) {
 void
 WMATH_ZERO(Vec3)(DST_VEC3) { dst->v[0] = 0.0f; dst->v[1] = 0.0f; dst->v[2] = 0.0f; }
 
+// 1
+void
+WMATH_IDENTITY(Vec3)(DST_VEC3) { dst->v[0] = 1.0f; dst->v[1] = 1.0f; dst->v[2] = 1.0f; }
+
 // ceil
 void
 WMATH_CEIL(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) a) {

@@ -18,11 +18,18 @@ include_directories(src)
 
 # 收集源文件
 file(GLOB MATH_COMMON_SOURCES "src/common/*.c")
-file(GLOB MATH_SOURCES "src/*.c")
+file(GLOB MATH_NO_DST_SOURCES "src/no_dst/*.c")
 file(GLOB MATH_DST_SOURCES "src/dst/*.c")
 
 # 合并所有源文件
-set(ALL_SOURCES ${MATH_COMMON_SOURCES} ${MATH_SOURCES} ${MATH_DST_SOURCES})
+option(WCN_MATH_IS_DST "Use Dst mode" ON)
+if(WCN_MATH_IS_DST)
+    message("    USE DST MODE")
+    set(ALL_SOURCES ${MATH_COMMON_SOURCES} ${MATH_DST_SOURCES})
+else()
+    message("    USE NO DST MODE")
+    set(ALL_SOURCES ${MATH_COMMON_SOURCES} ${MATH_NO_DST_SOURCES})
+endif()
 
 # 创建数学库
 add_library(wcn_math ${ALL_SOURCES})

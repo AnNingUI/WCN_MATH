@@ -1,34 +1,13 @@
 #pragma once
 
 #include "WCN/WCN_Math.h"
-
+#include "WCN/WCN_MATH_CPP_COMMON.hpp"
 
 namespace WCN
 {
     inline namespace Math {
-
     // =========================================================================
-    // 1. 类型定义与枚举 (Types & Enums)
-    // =========================================================================
-    
-    using                              Vec2                       =                                                                                                            WMATH_TYPE(Vec2);
-    using                              Vec3                       =                                                                                                            WMATH_TYPE(Vec3);
-    using                              Vec4                       =                                                                                                            WMATH_TYPE(Vec4);
-    using                              Quat                       =                                                                                                            WMATH_TYPE(Quat);
-    using                              Mat3                       =                                                                                                            WMATH_TYPE(Mat3);
-    using                              Mat4                       =                                                                                                            WMATH_TYPE(Mat4);
-
-    using                              RotationOrder              =                                                                                                            WCN_Math_RotationOrder;
-    // 暴露旋转顺序枚举值
-    constexpr                          RotationOrder RotOrder_XYZ =                                                                                                            WCN_Math_RotationOrder_XYZ;
-    constexpr                          RotationOrder RotOrder_XZY =                                                                                                            WCN_Math_RotationOrder_XZY;
-    constexpr                          RotationOrder RotOrder_YXZ =                                                                                                            WCN_Math_RotationOrder_YXZ;
-    constexpr                          RotationOrder RotOrder_YZX =                                                                                                            WCN_Math_RotationOrder_YZX;
-    constexpr                          RotationOrder RotOrder_ZXY =                                                                                                            WCN_Math_RotationOrder_ZXY;
-    constexpr                          RotationOrder RotOrder_ZYX =                                                                                                            WCN_Math_RotationOrder_ZYX;
-
-    // =========================================================================
-    // 2. 全局配置与基础数学 (Config & Scalar Utils)
+    // 1. 全局配置与基础数学 (Config & Scalar Utils)
     // =========================================================================
 
     static constexpr                   float PI                   =                                                                                                            WMATH_PI;
@@ -60,7 +39,7 @@ namespace WCN
     inline float                       random_range               (const float min, const float max)                                                                           { return min + random_float() * (max - min); }
 
     // =========================================================================
-    // 3. Vec2 完整封装
+    // 2. Vec2 完整封装
     // =========================================================================
 
     // 构造与常量
@@ -110,11 +89,12 @@ namespace WCN
     inline Vec2                        add_scaled                 (const Vec2 a, const Vec2 b, const float s)                                                                  { return WMATH_ADD_SCALED(Vec2)(a, b, s); } // a + b * s
 
     // =========================================================================
-    // 4. Vec3 完整封装
+    // 3. Vec3 完整封装
     // =========================================================================
 
     inline Vec3                        make_vec3                   (const float x, const float y, const float z)                                                               { return WMATH_CREATE(Vec3)({x, y, z}); }
     inline Vec3                        vec3_zero                   ()                                                                                                          { return WMATH_ZERO(Vec3)(); }
+    inline Vec3                        vec3_indentity               ()                                                                                                         { return WMATH_IDENTITY(Vec3)(); }
     inline Vec3                        random_vec3                 (const float scale = 1.0f)                                                                                  { return WMATH_RANDOM(Vec3)(scale); }
                 
     inline Vec3                        operator+                   (const Vec3 a, const Vec3 b)                                                                                { return WMATH_ADD(Vec3)(a, b); }
@@ -159,7 +139,7 @@ namespace WCN
     inline Vec3                        add_scaled                  (const Vec3 a, const Vec3 b, const float s)                                                                 { return WMATH_ADD_SCALED(Vec3)(a, b, s); }
 
     // =========================================================================
-    // 5. Vec4 完整封装
+    // 4. Vec4 完整封装
     // =========================================================================
  
     inline Vec4                        make_vec4                   (const float x, const float y, const float z, const float w)                                                { return WMATH_CREATE(Vec4)({x, y, z, w}); }
@@ -201,7 +181,7 @@ namespace WCN
     inline Vec4                        add_scaled                  (const Vec4 a, const Vec4 b, const float s)                                                                 { return WMATH_ADD_SCALED(Vec4)(a, b, s); }
 
     // =========================================================================
-    // 6. Quat 完整封装
+    // 5. Quat 完整封装
     // =========================================================================
 
     inline Quat                        make_quat                   (const float x, const float y, const float z, const float w)                                                { return WMATH_CREATE(Quat)({x, y, z, w}); }
@@ -238,12 +218,12 @@ namespace WCN
     inline Quat                        sqlerp                      (const Quat a, const Quat b, const Quat c, const Quat d, const float t)                                     { return WMATH_CALL(Quat, sqlerp)(a, b, c, d, t); }
                          
     inline Quat                        from_axis_angle             (const Vec3 axis, const float rad)                                                                          { return WMATH_CALL(Quat, from_axis_angle)(axis, rad); }
-    inline Quat                        from_euler                  (const float x, const float y, const float z, const RotationOrder order = RotOrder_XYZ)                     { return WMATH_CALL(Quat, from_euler)(x, y, z, order); }
+    inline Quat                        from_euler                  (const float x, const float y, const float z, const RotationOrder order = RotationOrder::XYZ)               { return WMATH_CALL(Quat, from_euler)(x, y, z, static_cast<enum WCN_Math_RotationOrder>(order)); }
     inline Quat                        rotation_to                 (const Vec3 from, const Vec3 to)                                                                            { return WMATH_CALL(Quat, rotation_to)(from, to); }
     inline WCN_Math_Vec3_WithAngleAxis to_axis_angle               (const Quat q)                                                                                              { return WMATH_CALL(Quat, to_axis_angle)(q); }
 
     // =========================================================================
-    // 7. Mat3 完整封装
+    // 6. Mat3 完整封装
     // =========================================================================
 
     inline Mat3                        mat3_identity               ()                                                                                                          { return WMATH_IDENTITY(Mat3)(); }
@@ -297,7 +277,7 @@ namespace WCN
     inline Vec3                        get_scaling_3d              (const Mat3 &m)                                                                                             { return WMATH_CALL(Mat3, get_3D_scaling)(m); }
 
     // =========================================================================
-    // 8. Mat4 完整封装
+    // 7. Mat4 完整封装
     // =========================================================================
 
     inline Mat4                        mat4_identity               ()                                                                                                          { return WMATH_IDENTITY(Mat4)(); }
@@ -379,7 +359,7 @@ namespace WCN
     inline Vec3                        get_scaling                  (const Mat4 &m)                                                                                            { return WMATH_CALL(Mat4, get_scaling)(m); }
 
     // =========================================================================
-    // 9. 类型转换 (Conversions)
+    // 10. 类型转换 (Conversions)
     // =========================================================================
 
     inline Mat3                        to_mat3                      (const Mat4 &m)                                                                                            { return WMATH_CALL(Mat3, from_mat4)(m); }

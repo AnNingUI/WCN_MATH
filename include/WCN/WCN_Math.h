@@ -192,6 +192,10 @@ WMATH_SET(Vec3)(WMATH_TYPE(Vec3) a, float x, float y, float z);
 WMATH_TYPE(Vec3)
 WMATH_ZERO(Vec3)();
 
+// 1
+WMATH_TYPE(Vec3)
+WMATH_IDENTITY(Vec3)();
+
 // ceil
 WMATH_TYPE(Vec3)
 WMATH_CEIL(Vec3)(WMATH_TYPE(Vec3) a);

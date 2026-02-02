@@ -25,8 +25,7 @@ DST (Destination-Source-Target) mode writes results to user-provided destination
 
 **Usage:**
 ```c
-#define WCN_USE_DST_MODE
-#include "WCN/WCN_Math.h"
+#include "WCN/WCN_MATH_DST.h"
 
 int main() {
     T$(Vec3) v1 = {...};
@@ -47,6 +46,9 @@ int main() {
 ```bash
 # Native
 cmake -B build && cmake --build build
+
+# Native NO DST MODE
+cmake -B build-no_dst -DWCN_MATH_IS_DST=OFF -d && cmake --build build
 
 # WebAssembly
 cmake -B build-wasm -DWCN_MATH_BUILD_WASM=ON && cmake --build build-wasm
