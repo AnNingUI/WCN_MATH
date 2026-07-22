@@ -50,6 +50,10 @@ option(WCN_MATH_ENABLE_AVX2 "Enable AVX2 instructions" ON)
 option(WCN_MATH_ENABLE_FMA "Enable FMA instructions" ON)
 option(WCN_MATH_ENABLE_NEON "Enable NEON instructions" ON)
 
+if(MSVC)
+    target_compile_options(wcn_math PRIVATE /utf-8)
+endif()
+
 # SIMD 检测宏定义
 if(WCN_MATH_ENABLE_SIMD)
     if(WCN_MATH_ENABLE_SSE)
