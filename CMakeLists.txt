@@ -12,10 +12,6 @@ include(CheckCCompilerFlag)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# 设置包含目录
-# include_directories(include)
-# include_directories(src)
-
 # 收集源文件
 file(GLOB MATH_COMMON_SOURCES "src/common/*.c")
 file(GLOB MATH_NO_DST_SOURCES "src/no_dst/*.c")
@@ -31,11 +27,31 @@ else()
     set(ALL_SOURCES ${MATH_COMMON_SOURCES} ${MATH_NO_DST_SOURCES})
 endif()
 
-# 创建数学库
-add_library(wcn_math ${ALL_SOURCES})
+# ===============================
+# 创建静态库
+# ===============================
+add_library(
+    wcn_math
+    STATIC
+    ${ALL_SOURCES}
+)
+# ===============================
+# include
+# ===============================
+target_include_directories(
+    wcn_math
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 
 # 链接数学库
 target_link_libraries(wcn_math m)
+
+if(MSVC)
+    target_compile_options(wcn_math PRIVATE /utf-8)
+endif()
 
 # SIMD 检测和配置选项
 option(WCN_MATH_ENABLE_SIMD "Enable SIMD optimizations" ON)
@@ -49,10 +65,6 @@ option(WCN_MATH_ENABLE_AVX "Enable AVX instructions" ON)
 option(WCN_MATH_ENABLE_AVX2 "Enable AVX2 instructions" ON)
 option(WCN_MATH_ENABLE_FMA "Enable FMA instructions" ON)
 option(WCN_MATH_ENABLE_NEON "Enable NEON instructions" ON)
-
-if(MSVC)
-    target_compile_options(wcn_math PRIVATE /utf-8)
-endif()
 
 # SIMD 检测宏定义
 if(WCN_MATH_ENABLE_SIMD)
