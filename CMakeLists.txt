@@ -47,7 +47,9 @@ target_include_directories(
 )
 
 # 链接数学库
-target_link_libraries(wcn_math m)
+if(NOT MSVC)
+    target_link_libraries(wcn_math m)
+endif()
 
 if(MSVC)
     target_compile_options(wcn_math PRIVATE /utf-8)
