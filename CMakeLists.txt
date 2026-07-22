@@ -9,7 +9,7 @@ project(WCN_MATH C CXX)
 include(CheckCCompilerFlag)
 
 # 设置 C 标准
-set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # 设置包含目录
@@ -165,6 +165,7 @@ if(EMSCRIPTEN OR WCN_MATH_BUILD_WASM)
         "src/dst/wcn_math_other.c"
         "src/dst/wcn_math_quat.c"
         "src/dst/wcn_math_vec2.c"
+        "src/dst/wcn_math_vec2xn.c"
         "src/dst/wcn_math_vec3.c"
         "src/dst/wcn_math_vec4.c"
         "src/dst/wcn_math_wasm.c"

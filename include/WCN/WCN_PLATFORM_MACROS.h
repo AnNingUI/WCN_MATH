@@ -1,6 +1,11 @@
 #ifndef WCN_PLATFORM_MACROS_H
 #define WCN_PLATFORM_MACROS_H
 
+#if !defined(__cplusplus) && \
+    (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L)
+    #define nullptr NULL
+#endif
+
 // ============================================================================
 // Platform and Architecture Detection
 // ============================================================================

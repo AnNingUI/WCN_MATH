@@ -9,6 +9,7 @@
     using i32 = int32_t;
     using u32 = uint32_t;
     using i64 = int64_t;
+    using u16 = uint16_t;
     using u63 = uint64_t;
     using f32 = float;
     using f64 = double;
@@ -18,6 +19,7 @@
     typedef signed short i16;
     typedef unsigned short u16;
     typedef signed int i32;
+    typedef unsigned short int u16;
     typedef unsigned int u32;
     typedef signed long long i64;
     typedef unsigned long long u64;

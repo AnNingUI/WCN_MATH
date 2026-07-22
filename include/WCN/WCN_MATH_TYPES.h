@@ -1,6 +1,7 @@
 #ifndef WCN_MATH_TYPES_H
 #define WCN_MATH_TYPES_H
 
+#include "WCN/Rtype.h"
 #include "WCN/WCN_MATH_MACROS.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -56,9 +57,14 @@ typedef struct {
 } WMATH_CREATE_TYPE(Mat4);
 
 // Quat Type
-
-typedef struct {
-  float v[4] __attribute__((aligned(16)));
+#ifdef _MSC_VER
+    #define WCN_ALIGNED_STRUCT(x) __declspec(align(x)) struct
+#else
+    // GCC / Clang 支持将 __attribute__ 放在 struct 关键字之后
+    #define WCN_ALIGNED_STRUCT(x) struct __attribute__((aligned(x)))
+#endif
+typedef WCN_ALIGNED_STRUCT(16) {
+  float v[4];
 } WMATH_TYPE(Quat);
 
 typedef struct {
@@ -114,8 +120,8 @@ typedef struct {
 
 // Vec4 Type
 
-typedef struct {
-  float v[4] __attribute__((aligned(16)));
+typedef WCN_ALIGNED_STRUCT(16) {
+  float v[4];
 } WMATH_TYPE(Vec4);
 
 typedef struct {
@@ -164,11 +170,78 @@ typedef struct {
     float* m[9]; // m[0] 指向所有矩阵的 m00，m[1] 指向 m01...
     size_t count;
 } WMATH_TYPE(Mat3xN);
-
+typedef NO_OP_IMPL struct {
+    float * m00;
+    float * m01;
+    float * m02;
+    float * m10;
+    float * m11;
+    float * m12;
+    float * m20;
+    float * m21;
+    float * m22;
+    size_t count;
+} WMATH_TYPE(Mat3xN_Flat); // 本结构体不会有算子实现
 // Mat4xN: 适用于骨骼变换矩阵、实例渲染世界矩阵
 typedef struct {
     float* m[16]; // m[0..15] 映射 4x4 矩阵的 16 个分量
     size_t count;
 } WMATH_TYPE(Mat4xN);
+typedef NO_OP_IMPL struct {
+    float * m00;
+    float * m01;
+    float * m02;
+    float * m03;
+
+    float * m10;
+    float * m11;
+    float * m12;
+    float * m13;
+
+    float * m20;
+    float * m21;
+    float * m22;
+    float * m23;
+
+    float * m30;
+    float * m31;
+    float * m32;
+    float * m33;
+    size_t count;
+} WMATH_TYPE(Mat4xN_Flat); // 本结构体不会有算子实现
+// ImageRGBA
+typedef struct {
+    f32* r;
+    f32* g;
+    f32* b;
+    f32* a;
+    size_t width;
+    size_t height;
+} WMATH_TYPE(ImageRGBA);
+
+typedef struct {
+    u8* data;
+    size_t width;
+    size_t height;
+} WMATH_TYPE(ImageBitmap);
+
+typedef WMATH_TYPE(ImageBitmap) WMATH_TYPE(ImageBitmapU8);
+
+typedef struct {
+    u16* data;
+    size_t width;
+    size_t height;
+} WMATH_TYPE(ImageBitmapU16);
+
+typedef struct {
+    f32* data;
+    size_t width;
+    size_t height;
+} WMATH_TYPE(ImageBitmapF32);
+
 // #endif // __WMATH_SOA__
 #endif // WCN_MATH_TYPES_H
+
+
+
+

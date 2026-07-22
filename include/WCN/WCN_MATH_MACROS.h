@@ -1,6 +1,7 @@
 #ifndef WCN_MATH_MACROS_H
 #define WCN_MATH_MACROS_H
 
+#define NO_OP_IMPL /* no_op_impl */
 
 // CONST
 

@@ -12,17 +12,17 @@ namespace WCN {
                 z_vec2() {
                     wcn_math_Vec2_zero(&value);
                 };
-                z_vec2(float x, float y) {
-                    value = T$(Vec2){
-                        .v = {x, y}
-                    };
-                }
+                z_vec2(T$(Vec2)& ref): value(ref) {}
+                z_vec2(float x, float y): value({x, y}) {}
                 z_vec2(const z_vec2& other) = default;
                 // copy 
                 z_vec2(z_vec2&& other) {
                     wcn_math_Vec2_copy(&value, other.value);
                 };
                 z_vec2& operator=(const z_vec2& other) = default;
+                static inline z_vec2 zero() {
+                    return z_vec2(0.0f, 0.0f);
+                }
                 
                 ~z_vec2() = default;
             
@@ -67,6 +67,7 @@ namespace WCN {
                     wcn_math_Vec2_add_scaled(&value, value, other.get(), scale);
                     return this;
                 }
+
         };
     }
 }

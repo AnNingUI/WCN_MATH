@@ -11,14 +11,14 @@ extern "C" {
 #include <stdbool.h>
 
 static inline void* wcn_aligned_alloc(size_t size, size_t alignment) {
-    void* ptr = NULL;
+    void* ptr = nullptr;
 #if defined(_WIN32)
     // Windows (MSVC)
     ptr = _aligned_malloc(size, alignment);
 #else
     // Linux / macOS / POSIX
     if (posix_memalign(&ptr, alignment, size) != 0) {
-        ptr = NULL;
+        ptr = nullptr;
     }
 #endif
     return ptr;
