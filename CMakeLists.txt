@@ -9,7 +9,7 @@ project(WCN_MATH C CXX)
 include(CheckCCompilerFlag)
 
 # 设置 C 标准
-set(CMAKE_C_STANDARD 23)
+set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # 设置包含目录
