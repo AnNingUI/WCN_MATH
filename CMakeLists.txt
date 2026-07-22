@@ -13,12 +13,8 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # 设置包含目录
-add_library(wcn_math STATIC ${ALL_SOURCES})
-
-target_include_directories(wcn_math
-    PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
+# include_directories(include)
+# include_directories(src)
 
 # 收集源文件
 file(GLOB MATH_COMMON_SOURCES "src/common/*.c")
