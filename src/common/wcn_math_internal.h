@@ -645,6 +645,10 @@ static inline float wcn_fast_inv_sqrt(const float x) {
   return y;
 }
 
+static inline float wcn_safe_div_float(const float a, const float b) {
+  return b == 0.0f ? 0.0f : a / b;
+}
+
 extern const int WCN_MATH_ROTATION_SIGN_TABLE[WCN_MATH_ROTATION_ORDER_COUNT][4];
 
 extern float EPSILON;
