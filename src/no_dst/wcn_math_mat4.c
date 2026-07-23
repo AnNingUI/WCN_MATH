@@ -2448,13 +2448,13 @@ WMATH_CALL(Mat4, aim)
 #else
   // Scalar fallback - optimized with fast inverse square root
   WMATH_TYPE(Vec3) z_axis = WMATH_SUB(Vec3)(target, position);
-  wcn_fast_normalize_vec3(z_axis.v);
+  z_axis = WMATH_NORMALIZE(Vec3)(z_axis);
 
   WMATH_TYPE(Vec3) x_axis = WMATH_CROSS(Vec3)(up, z_axis);
-  wcn_fast_normalize_vec3(x_axis.v);
+  x_axis = WMATH_NORMALIZE(Vec3)(x_axis);
 
   WMATH_TYPE(Vec3) y_axis = WMATH_CROSS(Vec3)(z_axis, x_axis);
-  wcn_fast_normalize_vec3(y_axis.v);
+  y_axis = WMATH_NORMALIZE(Vec3)(y_axis);
 
   // Direct assignment is more efficient than memset
   result.m[0] = x_axis.v[0];
