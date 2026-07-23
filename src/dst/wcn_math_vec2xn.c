@@ -15,7 +15,7 @@
 #include <assert.h> // 用于断言
 #include <math.h>
 #include "WCN/WCN_MATH_SOA.h"
-#include "common/wcn_math_internal.h"
+#include "../common/wcn_math_internal.h"
 
 ///| 堆
 WMATH_TYPE(Vec2xN) * wcn_math_Vec2xN_malloc(const size_t count) 

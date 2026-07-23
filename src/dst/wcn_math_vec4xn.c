@@ -1,5 +1,5 @@
 #include "WCN/WCN_MATH_SOA.h"
-#include "common/wcn_math_internal.h"
+#include "../common/wcn_math_internal.h"
 
 void wcn_math_Vec4xN_free(WMATH_TYPE(Vec4xN)* vec4xN) {
     if (vec4xN == nullptr) return;

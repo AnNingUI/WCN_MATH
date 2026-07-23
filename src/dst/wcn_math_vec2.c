@@ -1,4 +1,4 @@
-#include "common/wcn_math_internal.h"
+#include "../common/wcn_math_internal.h"
 #include "WCN/WCN_MATH_DST.h"
 // BEGIN Vec2
 

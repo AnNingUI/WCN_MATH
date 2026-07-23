@@ -9,9 +9,33 @@
 // TYPE
 
 // Mat3 Type
-
+/**
+-------------
+00 01 02 | pd
+10 11 12 | pd
+20 21 22 | pd
+-------------
+*/
 typedef struct {
-  float m[12]; // Using 12 elements for better SIMD alignment
+  union {
+    struct {
+      float m_00;
+      float m_01;
+      float m_02;
+      float pad1;
+      // next row
+      float m_10;
+      float m_11;
+      float m_12;
+      float pad2;
+      // next row
+      float m_20;
+      float m_21;
+      float m_22;
+      float pad3;
+    };
+    float m[12]; // Using 12 elements for better SIMD alignment
+  };
 } WMATH_TYPE(Mat3);
 
 typedef struct {
@@ -31,7 +55,30 @@ typedef struct {
 // Mat4 Type
 
 typedef struct {
-  float m[16];
+  union {
+    struct {
+      float m_00;
+      float m_01;
+      float m_02;
+      float m_03;
+      // next row
+      float m_10;
+      float m_11;
+      float m_12;
+      float m_13;
+      // next row
+      float m_20;
+      float m_21;
+      float m_22;
+      float m_23;
+      // next row
+      float m_30;
+      float m_31;
+      float m_32;
+      float m_33;
+    };
+    float m[16];
+  };
 } WMATH_TYPE(Mat4);
 
 typedef struct {
@@ -64,14 +111,38 @@ typedef struct {
     #define WCN_ALIGNED_STRUCT(x) struct __attribute__((aligned(x)))
 #endif
 typedef WCN_ALIGNED_STRUCT(16) {
-  float v[4];
+  union {
+    struct {
+      float v_x;
+      float v_y;
+      float v_z;
+      float v_w;
+    };
+    struct {
+      float x;
+      float y;
+      float z;
+      float w;
+    };
+    float v[4];
+  };
 } WMATH_TYPE(Quat);
 
 typedef struct {
-  float v_x;
-  float v_y;
-  float v_z;
-  float v_w;
+  union {
+    struct {
+      float v_x;
+      float v_y;
+      float v_z;
+      float v_w;
+    };
+    struct {
+      float x;
+      float y;
+      float z;
+      float w;
+    };
+  };
 } WMATH_CREATE_TYPE(Quat);
 
 enum WCN_Math_RotationOrder {
@@ -93,24 +164,64 @@ extern const int WCN_MATH_ROTATION_SIGN_TABLE[WCN_MATH_ROTATION_ORDER_COUNT][4];
 // Vec2 Type
 
 typedef struct {
-  float v[2];
+  union {
+    struct {
+      float v_x;
+      float v_y;
+    };
+    struct {
+      float x;
+      float y;
+    };
+    float v[2];
+  };
 } WMATH_TYPE(Vec2);
 
 typedef struct {
-  float v_x;
-  float v_y;
+  union {
+    struct {
+      float v_x;
+      float v_y;
+    };
+    struct {
+      float x;
+      float y;
+    };
+  };
 } WMATH_CREATE_TYPE(Vec2);
 
 // Vec3 Type
 
 typedef struct {
-  float v[3];
+  union {
+    
+    struct {
+      float v_x;
+      float v_y;
+      float v_z;
+    };
+    struct {
+      float x;
+      float y;
+      float z;
+    };
+    float v[3];
+  };
 } WMATH_TYPE(Vec3);
 
 typedef struct {
-  float v_x;
-  float v_y;
-  float v_z;
+  union {
+    struct {
+      float v_x;
+      float v_y;
+      float v_z;
+    };
+    struct {
+      float x;
+      float y;
+      float z;
+    };
+  };
 } WMATH_CREATE_TYPE(Vec3);
 
 typedef struct {
@@ -121,14 +232,38 @@ typedef struct {
 // Vec4 Type
 
 typedef WCN_ALIGNED_STRUCT(16) {
-  float v[4];
+  union {
+    struct {
+      float v_x;
+      float v_y;
+      float v_z;
+      float v_w;
+    };
+    struct {
+      float x;
+      float y;
+      float z;
+      float w;
+    };
+    float v[4];
+  };
 } WMATH_TYPE(Vec4);
 
 typedef struct {
-  float v_x;
-  float v_y;
-  float v_z;
-  float v_w;
+  union {
+    struct {
+      float v_x;
+      float v_y;
+      float v_z;
+      float v_w;
+    };
+    struct {
+      float x;
+      float y;
+      float z;
+      float w;
+    };
+  };
 } WMATH_CREATE_TYPE(Vec4);
 
 // #ifdef __WMATH_SOA__

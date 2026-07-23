@@ -1,5 +1,5 @@
 #include "WCN/WCN_MATH_DST.h"
-#include "common/wcn_math_internal.h"
+#include "../common/wcn_math_internal.h"
 #include <string.h>
 static inline void __prev_clangd_check() {
 wcn_math_get_epsilon();

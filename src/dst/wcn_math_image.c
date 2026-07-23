@@ -1,5 +1,5 @@
 #include "WCN/WCN_MATH_TYPES.h"
-#include "common/wcn_math_internal.h"
+#include "../common/wcn_math_internal.h"
 #include <math.h>
 #include <string.h>
 

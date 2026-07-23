@@ -17,11 +17,7 @@ extern "C" {
 #endif
 
 #define INIT$(WCN_Math_TYPE, ...)               \
-    WMATH_CREATE(WCN_Math_TYPE)(                \
-       (WMATH_CREATE_TYPE(WCN_Math_TYPE)){      \
-          __VA_ARGS__                           \
-        }                                       \
-    )
+    (WMATH_TYPE(WCN_Math_TYPE)){ __VA_ARGS__ }
 
 // Config
 extern float EPSILON;

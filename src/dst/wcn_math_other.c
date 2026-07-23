@@ -1,6 +1,6 @@
 #include "WCN/WCN_MATH_DST.h"
 #include "WCN/WCN_PLATFORM_MACROS.h"
-#include "common/wcn_math_internal.h"
+#include "../common/wcn_math_internal.h"
 // FROM
 
 void WMATH_CALL(Mat3, from_mat4)(DST_MAT3, WMATH_TYPE(Mat4) a) {
