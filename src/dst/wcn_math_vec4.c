@@ -801,7 +801,7 @@ float WMATH_DOT(Vec4)(const WMATH_TYPE(Vec4) a, const WMATH_TYPE(Vec4) b) {
 float WMATH_LENGTH_SQ(Vec4)(const WMATH_TYPE(Vec4) v) {
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
     __m128 vec_v = _mm_load_ps(v.v);
-    __m128 vec_squared = _mm_mul_ps(vec_v, vec_squared);
+    __m128 vec_squared = _mm_mul_ps(vec_v, vec_v);
     const __m128 hadd1 = _mm_hadd_ps(vec_squared, vec_squared);
     const __m128 hadd2 = _mm_hadd_ps(hadd1, hadd1);
     return _mm_cvtss_f32(hadd2);

@@ -4518,7 +4518,7 @@ WMATH_TRANSLATION(Mat3)
 WMATH_TYPE(Mat3)
 WMATH_CALL(Mat3, translate)
 (WMATH_TYPE(Mat3) m, WMATH_TYPE(Vec2) v) {
-  WMATH_TYPE(Mat3) newDst;
+  WMATH_TYPE(Mat3) newDst = m;
 
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
   // SSE implementation - optimized 2D matrix translation
@@ -5683,7 +5683,7 @@ WMATH_CALL(Mat4, perspective_reverse_z)
 WMATH_TYPE(Mat4)
 WMATH_CALL(Mat4, translate)
 (WMATH_TYPE(Mat4) m, WMATH_TYPE(Vec3) v) {
-  WMATH_TYPE(Mat4) newDst;
+  WMATH_TYPE(Mat4) newDst = m;
 
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
   // SSE implementation - optimized matrix translation

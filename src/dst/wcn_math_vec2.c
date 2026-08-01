@@ -1665,7 +1665,7 @@ WMATH_TRUNCATE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const float length) {
 // midpoint
 void
 WMATH_MIDPOINT(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) {
-  return WMATH_LERP(Vec2)(dst, a, b, 0.5f);
+  WMATH_LERP(Vec2)(dst, a, b, 0.5f);
 }
 
 // END Vec2

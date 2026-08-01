@@ -1111,7 +1111,8 @@ WMATH_DIV_SCALAR(Vec3)(DST_VEC3,
                        const WMATH_TYPE(Vec3) a,
                        const float scalar) {
   if (scalar == 0) {
-    return WMATH_ZERO(Vec3)(dst);
+    WMATH_ZERO(Vec3)(dst);
+    return;
   }
 
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
@@ -1411,7 +1412,7 @@ WMATH_TRUNCATE(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) v, const float max_length)
 // midpoint
 void
 WMATH_MIDPOINT(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) a, const WMATH_TYPE(Vec3) b) {
-  return WMATH_LERP(Vec3)(dst, a, b, 0.5f);
+  WMATH_LERP(Vec3)(dst, a, b, 0.5f);
 }
 
 // END Vec3

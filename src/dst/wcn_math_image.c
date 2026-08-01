@@ -65,7 +65,7 @@ void wcn_math_Vec4xN_to_ImageBitmap(
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
     // SSE - process 4 pixels at a time
     const __m128 scale = _mm_set1_ps(255.0f);
-    const __m128 half = _mm_set1_ps(0.5f);
+    // const __m128 half = _mm_set1_ps(0.5f);
 
     for (; i + 4 <= total_pixels; i += 4) {
         // Load 4 color values for each channel
@@ -447,7 +447,6 @@ void wcn_math_ImageRGBA_to_ImageBitmap(
     const size_t width,
     const size_t height
 ) {
-    "SIMD OPEN";
     if (!image || !image_rgba || width == 0 || height == 0) {
         return;
     }

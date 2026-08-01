@@ -19,6 +19,8 @@ compile_commands.json
 .lookme/*
 .dev_docs/*
 .omc
+.pi
+.pi-subagents
 
 build_*
 .ace-tool/
