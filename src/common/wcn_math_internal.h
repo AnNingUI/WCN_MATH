@@ -6,6 +6,7 @@ extern "C" {
 #endif
 #include "WCN/WCN_PLATFORM_MACROS.h"
 #include <stdlib.h>
+#include <string.h> // memcpy/memset used across all modules
 // ========================================================================
 #include "WCN/WCN_MATH_TYPES.h"
 #include <stdbool.h>

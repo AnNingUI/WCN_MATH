@@ -935,7 +935,7 @@ float WMATH_DOT(Vec4)(WMATH_TYPE(Vec4) a, WMATH_TYPE(Vec4) b) {
   v128_t v = wasm_i32x4_shuffle(vec_mul, vec_mul, 0, 1, 2, 3);
   v128_t v2 = wasm_i32x4_shuffle(vec_mul, vec_mul, 2, 3, 2, 3);
   v128_t sum = wasm_f32x4_add(v, v2);
-  v = wasm_i32x4_shuffle(sum, sum, 0, 1, 0, 1);
+  v = wasm_i32x4_shuffle(sum, sum, 1, 1, 1, 1);
   sum = wasm_f32x4_add(v, sum);
   return wasm_f32x4_extract_lane(sum, 0);
 
@@ -988,7 +988,7 @@ float WMATH_LENGTH_SQ(Vec4)(WMATH_TYPE(Vec4) v) {
   v128_t v_temp = wasm_i32x4_shuffle(vec_squared, vec_squared, 0, 1, 2, 3);
   v128_t v2 = wasm_i32x4_shuffle(vec_squared, vec_squared, 2, 3, 2, 3);
   v128_t sum = wasm_f32x4_add(v_temp, v2);
-  v_temp = wasm_i32x4_shuffle(sum, sum, 0, 1, 0, 1);
+  v_temp = wasm_i32x4_shuffle(sum, sum, 1, 1, 1, 1);
   sum = wasm_f32x4_add(v_temp, sum);
   return wasm_f32x4_extract_lane(sum, 0);
 
@@ -1101,7 +1101,7 @@ WMATH_TYPE(Vec4) WMATH_NORMALIZE(Vec4)(WMATH_TYPE(Vec4) v) {
   v128_t v_temp = wasm_i32x4_shuffle(vec_squared, vec_squared, 0, 1, 2, 3);
   v128_t v2 = wasm_i32x4_shuffle(vec_squared, vec_squared, 2, 3, 2, 3);
   v128_t sum = wasm_f32x4_add(v_temp, v2);
-  v_temp = wasm_i32x4_shuffle(sum, sum, 0, 1, 0, 1);
+  v_temp = wasm_i32x4_shuffle(sum, sum, 1, 1, 1, 1);
   sum = wasm_f32x4_add(v_temp, sum);
   float len_sq = wasm_f32x4_extract_lane(sum, 0);
 

@@ -80,7 +80,7 @@ WCN_WASM_EXPORT void wcn_math_Vec2_copy_wasm(vec2_t* out, const vec2_t* in) {
     out->v[1] = in->v[1];
 }
 WCN_WASM_EXPORT void wcn_math_Vec2_zero_wasm(vec2_t* out) { WMATH_ZERO(Vec2)(out); }
-WCN_WASM_EXPORT void wcn_math_Vec2_identity_wasm(vec2_t* out) { WMATH_ZERO(Vec2)(out); }
+WCN_WASM_EXPORT void wcn_math_Vec2_identity_wasm(vec2_t* out) { WMATH_IDENTITY(Vec2)(out); }
 WCN_WASM_EXPORT void wcn_math_Vec2_ceil_wasm(vec2_t* out, const vec2_t* in) {
     WMATH_CEIL(Vec2)(out, *in);
 }
@@ -202,7 +202,7 @@ WCN_WASM_EXPORT void wcn_math_Vec3_copy_wasm(vec3_t* out, const vec3_t* in) {
     out->v[2] = in->v[2];
 }
 WCN_WASM_EXPORT void wcn_math_Vec3_zero_wasm(vec3_t* out) { WMATH_ZERO(Vec3)(out); }
-WCN_WASM_EXPORT void wcn_math_Vec3_identity_wasm(vec3_t* out) { WMATH_ZERO(Vec3)(out); }
+WCN_WASM_EXPORT void wcn_math_Vec3_identity_wasm(vec3_t* out) { WMATH_IDENTITY(Vec3)(out); }
 WCN_WASM_EXPORT void wcn_math_Vec3_ceil_wasm(vec3_t* out, const vec3_t* in) {
     WMATH_CEIL(Vec3)(out, *in);
 }
@@ -323,7 +323,7 @@ WCN_WASM_EXPORT void wcn_math_Vec4_copy_wasm(vec4_t* out, const vec4_t* in) {
     out->v[3] = in->v[3];
 }
 WCN_WASM_EXPORT void wcn_math_Vec4_zero_wasm(vec4_t* out) { WMATH_ZERO(Vec4)(out); }
-WCN_WASM_EXPORT void wcn_math_Vec4_identity_wasm(vec4_t* out) { WMATH_ZERO(Vec4)(out); }
+WCN_WASM_EXPORT void wcn_math_Vec4_identity_wasm(vec4_t* out) { WMATH_IDENTITY(Vec4)(out); }
 WCN_WASM_EXPORT void wcn_math_Vec4_ceil_wasm(vec4_t* out, const vec4_t* in) {
     WMATH_CEIL(Vec4)(out, *in);
 }
@@ -391,7 +391,7 @@ WCN_WASM_EXPORT float wcn_math_Vec4_length_squared_wasm(const vec4_t* in) {
     return WMATH_LENGTH_SQ(Vec4)(*in);
 }
 WCN_WASM_EXPORT float wcn_math_Vec4_length_wasm(const vec4_t* in) {
-    return WMATH_LENGTH_SQ(Vec4)(*in);
+    return WMATH_LENGTH(Vec4)(*in);
 }
 WCN_WASM_EXPORT float wcn_math_Vec4_distance_wasm(const vec4_t* a, const vec4_t* b) {
     return WMATH_DISTANCE(Vec4)(*a, *b);
