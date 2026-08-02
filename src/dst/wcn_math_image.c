@@ -122,21 +122,17 @@ void wcn_math_Vec4xN_to_ImageBitmap(
         z = vminq_f32(z, vdupq_n_f32(1.0f));
         w = vminq_f32(w, vdupq_n_f32(1.0f));
 
-        // Convert to int16, then to uint8 and interleave
-        int16x8_t r = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(x, scale)));
-        int16x8_t g = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(y, scale)));
-        int16x8_t b = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(z, scale)));
-        int16x8_t a = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(w, scale)));
+        // Convert to uint8 and pack RGBA into 32-bit lanes
+        uint32x4_t r_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(x, scale)));
+        uint32x4_t g_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(y, scale)));
+        uint32x4_t b_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(z, scale)));
+        uint32x4_t a_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(w, scale)));
 
-        // Narrow to 8-bit and pack
-        uint8x8_t r_u8 = vqmovun_s16(vget_low_s16(r));
-        uint8x8_t g_u8 = vqmovun_s16(vget_low_s16(g));
-        uint8x8_t b_u8 = vqmovun_s16(vget_low_s16(b));
-        uint8x8_t a_u8 = vqmovun_s16(vget_low_s16(a));
-
-        // Interleave RGBA channels
-        uint8x8x4_t rgba = {{r_u8, g_u8, b_u8, a_u8}};
-        vst4_u8(&image->data[i * 4], rgba);
+        // Interleave RGBA channels: lane = R | G<<8 | B<<16 | A<<24 (RGBA8, little-endian)
+        uint32x4_t rgba = vorrq_u32(r_u32, vshlq_n_u32(g_u32, 8));
+        rgba = vorrq_u32(rgba, vshlq_n_u32(b_u32, 16));
+        rgba = vorrq_u32(rgba, vshlq_n_u32(a_u32, 24));
+        vst1q_u32((uint32_t*)&image->data[i * 4], rgba);
     }
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
@@ -347,17 +343,19 @@ void wcn_math_ImageBitmap_to_Vec4xN(
     const float32x4_t inv_scale = vdupq_n_f32(1.0f / 255.0f);
 
     for (; i + 4 <= total_pixels; i += 4) {
-        // Load 16 bytes
-        uint8x16_t rgba = vld1q_u8(&image->data[i * 4]);
+        // Load 4 packed RGBA pixels and deinterleave via shifts
+        uint32x4_t px = vld1q_u32((const uint32_t*)&image->data[i * 4]);
 
-        // Deinterleave RGBA
-        uint8x8x4_t rgba_8 = vuzp4_u8(vget_low_u8(rgba), vget_high_u8(rgba));
+        uint32x4_t r_u32 = vandq_u32(px, vdupq_n_u32(0xFF));
+        uint32x4_t g_u32 = vandq_u32(vshrq_n_u32(px, 8), vdupq_n_u32(0xFF));
+        uint32x4_t b_u32 = vandq_u32(vshrq_n_u32(px, 16), vdupq_n_u32(0xFF));
+        uint32x4_t a_u32 = vandq_u32(vshrq_n_u32(px, 24), vdupq_n_u32(0xFF));
 
         // Convert to float
-        float32x4_t r = vmulq_f32(vcvtq_f32_u32(vmovl_u8(rgba_8.val[0])), inv_scale);
-        float32x4_t g = vmulq_f32(vcvtq_f32_u32(vmovl_u8(rgba_8.val[1])), inv_scale);
-        float32x4_t b = vmulq_f32(vcvtq_f32_u32(vmovl_u8(rgba_8.val[2])), inv_scale);
-        float32x4_t a = vmulq_f32(vcvtq_f32_u32(vmovl_u8(rgba_8.val[3])), inv_scale);
+        float32x4_t r = vmulq_f32(vcvtq_f32_u32(r_u32), inv_scale);
+        float32x4_t g = vmulq_f32(vcvtq_f32_u32(g_u32), inv_scale);
+        float32x4_t b = vmulq_f32(vcvtq_f32_u32(b_u32), inv_scale);
+        float32x4_t a = vmulq_f32(vcvtq_f32_u32(a_u32), inv_scale);
 
         vst1q_f32(&vec4xN->x[i], r);
         vst1q_f32(&vec4xN->y[i], g);
@@ -525,19 +523,16 @@ void wcn_math_ImageRGBA_to_ImageBitmap(
         b = vminq_f32(b, vdupq_n_f32(1.0f));
         a = vminq_f32(a, vdupq_n_f32(1.0f));
 
-        // Convert and interleave
-        int16x8_t r_s16 = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(r, scale)));
-        int16x8_t g_s16 = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(g, scale)));
-        int16x8_t b_s16 = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(b, scale)));
-        int16x8_t a_s16 = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(a, scale)));
+        // Convert and interleave: lane = R | G<<8 | B<<16 | A<<24 (RGBA8, little-endian)
+        uint32x4_t r_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(r, scale)));
+        uint32x4_t g_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(g, scale)));
+        uint32x4_t b_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(b, scale)));
+        uint32x4_t a_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(a, scale)));
 
-        uint8x8_t r_u8 = vqmovun_s16(vget_low_s16(r_s16));
-        uint8x8_t g_u8 = vqmovun_s16(vget_low_s16(g_s16));
-        uint8x8_t b_u8 = vqmovun_s16(vget_low_s16(b_s16));
-        uint8x8_t a_u8 = vqmovun_s16(vget_low_s16(a_s16));
-
-        uint8x8x4_t rgba = {{r_u8, g_u8, b_u8, a_u8}};
-        vst4_u8(&image->data[i * 4], rgba);
+        uint32x4_t rgba = vorrq_u32(r_u32, vshlq_n_u32(g_u32, 8));
+        rgba = vorrq_u32(rgba, vshlq_n_u32(b_u32, 16));
+        rgba = vorrq_u32(rgba, vshlq_n_u32(a_u32, 24));
+        vst1q_u32((uint32_t*)&image->data[i * 4], rgba);
     }
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
@@ -744,16 +739,19 @@ void wcn_math_ImageBitmap_to_ImageRGBA(
     const float32x4_t inv_scale = vdupq_n_f32(1.0f / 255.0f);
 
     for (; i + 4 <= total_pixels; i += 4) {
-        uint8x16_t rgba = vld1q_u8(&image_bitmap->data[i * 4]);
+        // Load 4 packed RGBA pixels and deinterleave via shifts
+        uint32x4_t px = vld1q_u32((const uint32_t*)&image_bitmap->data[i * 4]);
 
-        // Deinterleave RGBA
-        uint8x8x4_t rgba_8 = vuzp4_u8(vget_low_u8(rgba), vget_high_u8(rgba));
+        uint32x4_t r_u32 = vandq_u32(px, vdupq_n_u32(0xFF));
+        uint32x4_t g_u32 = vandq_u32(vshrq_n_u32(px, 8), vdupq_n_u32(0xFF));
+        uint32x4_t b_u32 = vandq_u32(vshrq_n_u32(px, 16), vdupq_n_u32(0xFF));
+        uint32x4_t a_u32 = vandq_u32(vshrq_n_u32(px, 24), vdupq_n_u32(0xFF));
 
         // Convert to float
-        float32x4_t r = vmulq_f32(vcvtq_f32_u32(vmovl_u8(rgba_8.val[0])), inv_scale);
-        float32x4_t g = vmulq_f32(vcvtq_f32_u32(vmovl_u8(rgba_8.val[1])), inv_scale);
-        float32x4_t b = vmulq_f32(vcvtq_f32_u32(vmovl_u8(rgba_8.val[2])), inv_scale);
-        float32x4_t a = vmulq_f32(vcvtq_f32_u32(vmovl_u8(rgba_8.val[3])), inv_scale);
+        float32x4_t r = vmulq_f32(vcvtq_f32_u32(r_u32), inv_scale);
+        float32x4_t g = vmulq_f32(vcvtq_f32_u32(g_u32), inv_scale);
+        float32x4_t b = vmulq_f32(vcvtq_f32_u32(b_u32), inv_scale);
+        float32x4_t a = vmulq_f32(vcvtq_f32_u32(a_u32), inv_scale);
 
         vst1q_f32(&image->r[i], r);
         vst1q_f32(&image->g[i], g);
@@ -909,19 +907,16 @@ void wcn_math_simd_soa_to_rgba_u8(
     b = vmaxq_f32(vminq_f32(b, vdupq_n_f32(1.0f)), vdupq_n_f32(0.0f));
     a = vmaxq_f32(vminq_f32(a, vdupq_n_f32(1.0f)), vdupq_n_f32(0.0f));
 
-    // Convert and narrow
-    int16x8_t r_s16 = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(r, scale)));
-    int16x8_t g_s16 = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(g, scale)));
-    int16x8_t b_s16 = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(b, scale)));
-    int16x8_t a_s16 = vreinterpretq_s16_s32(vcvtaq_s32_f32(vmulq_f32(a, scale)));
+    // Convert and pack RGBA into 32-bit lanes: lane = R | G<<8 | B<<16 | A<<24
+    uint32x4_t r_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(r, scale)));
+    uint32x4_t g_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(g, scale)));
+    uint32x4_t b_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(b, scale)));
+    uint32x4_t a_u32 = vreinterpretq_u32_s32(vcvtaq_s32_f32(vmulq_f32(a, scale)));
 
-    uint8x8_t r_u8 = vqmovun_s16(vget_low_s16(r_s16));
-    uint8x8_t g_u8 = vqmovun_s16(vget_low_s16(g_s16));
-    uint8x8_t b_u8 = vqmovun_s16(vget_low_s16(b_s16));
-    uint8x8_t a_u8 = vqmovun_s16(vget_low_s16(a_s16));
-
-    uint8x8x4_t rgba = {{r_u8, g_u8, b_u8, a_u8}};
-    vst4_u8(dst_rgba, rgba);
+    uint32x4_t rgba = vorrq_u32(r_u32, vshlq_n_u32(g_u32, 8));
+    rgba = vorrq_u32(rgba, vshlq_n_u32(b_u32, 16));
+    rgba = vorrq_u32(rgba, vshlq_n_u32(a_u32, 24));
+    vst1q_u32((uint32_t*)dst_rgba, rgba);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
     // WebAssembly SIMD implementation
@@ -1089,15 +1084,19 @@ void wcn_math_simd_rgba_to_soa_u8(
     // NEON implementation
     const float32x4_t inv_scale = vdupq_n_f32(1.0f / 255.0f);
 
-    // Load and deinterleave
-    uint8x16_t rgba = vld1q_u8(src_rgba);
-    uint8x8x4_t rgba_8 = vuzp4_u8(vget_low_u8(rgba), vget_high_u8(rgba));
+    // Load and deinterleave via shifts
+    uint32x4_t px = vld1q_u32((const uint32_t*)src_rgba);
 
-    // Widen to 16-bit then 32-bit, convert to float
-    float32x4_t r = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(vmovl_u8(rgba_8.val[0])))), inv_scale);
-    float32x4_t g = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(vmovl_u8(rgba_8.val[1])))), inv_scale);
-    float32x4_t b = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(vmovl_u8(rgba_8.val[2])))), inv_scale);
-    float32x4_t a = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(vmovl_u8(rgba_8.val[3])))), inv_scale);
+    uint32x4_t r_u32 = vandq_u32(px, vdupq_n_u32(0xFF));
+    uint32x4_t g_u32 = vandq_u32(vshrq_n_u32(px, 8), vdupq_n_u32(0xFF));
+    uint32x4_t b_u32 = vandq_u32(vshrq_n_u32(px, 16), vdupq_n_u32(0xFF));
+    uint32x4_t a_u32 = vandq_u32(vshrq_n_u32(px, 24), vdupq_n_u32(0xFF));
+
+    // Convert to float
+    float32x4_t r = vmulq_f32(vcvtq_f32_u32(r_u32), inv_scale);
+    float32x4_t g = vmulq_f32(vcvtq_f32_u32(g_u32), inv_scale);
+    float32x4_t b = vmulq_f32(vcvtq_f32_u32(b_u32), inv_scale);
+    float32x4_t a = vmulq_f32(vcvtq_f32_u32(a_u32), inv_scale);
 
     vst1q_f32(dst_r, r);
     vst1q_f32(dst_g, g);
