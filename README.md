@@ -11,35 +11,24 @@ Designed to provide SIMD-accelerated math operations for CPU-based computations.
 - **Types**: Vec2/Vec3/Vec4, Mat3/Mat4, Quat
 - **SIMD**: SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2, AVX, AVX2, FMA, NEON, RISC-V Vector, LoongArch LSX
 - **WASM**: WebAssembly compilation support
-- **DST Mode**: Destination-Source-Target API for explicit memory control
+- **API**: destination-out-param (the only API; see [docs/MIGRATION.md](docs/MIGRATION.md))
 
-## DST Mode
+## API shape
 
-DST (Destination-Source-Target) mode writes results to user-provided destination pointers.
+Every operation takes its destination as the first argument and writes into it.
+Functions whose result is a scalar (`dot`, `length`, `angle`, `equals`, …) return it
+directly instead.
 
-**Advantages:**
-- Explicit memory control, no implicit allocations
-- Stack-based operations, no heap memory
-- Suitable for embedded and real-time systems
-- Easier SIMD vectorization
-
-**Usage:**
 ```c
-#include "WCN/WCN_MATH_DST.h"
-
-int main() {
-    T$(Vec3) v1 = {...};
-    T$(Vec3) v2 = {...};
-    T$(Vec3) result;
-
-    // Results written to dst parameter
-    WMATH_ADD(Vec3)(&result, v1, v2);
-    WMATH_CROSS(Vec3)(&result, v1, v2);
-    WMATH_NORMALIZE(Vec3)(&result, v1);
-
-    return 0;
-}
+T$(Vec3) out;
+WMATH_ADD(Vec3)(&out, a, b);        // struct result -> written into `out`
+float d = WMATH_DOT(Vec3)(a, b);    // scalar result -> returned
 ```
+
+**Why not return-by-value:** this needs no implicit copies, keeps every operation on the
+stack, and maps directly onto SIMD. A second return-by-value API used to exist alongside
+it; [docs/MIGRATION.md](docs/MIGRATION.md) explains why it was removed and how to rewrite
+its call sites.
 
 ## Building
 
@@ -47,15 +36,12 @@ int main() {
 # Native
 cmake -B build && cmake --build build
 
-# Native NO DST MODE
-cmake -B build-no_dst -DWCN_MATH_IS_DST=OFF -d && cmake --build build
-
 # WebAssembly
 cmake -B build-wasm -DWCN_MATH_BUILD_WASM=ON && cmake --build build-wasm
 
 # Building examples
 python make.example.py -name B.c -cc gcc
-python make.example.py -name wcn_math_cpp.cpp -cc g++ 
+python make.example.py -name DST_MOD_CPP.cpp -cc g++
 
 # run examples
 ./build/examples/B
@@ -65,7 +51,13 @@ python make.example.py -name wcn_math_cpp.cpp -cc g++
 
 ## Usage
 
-Include `WCN/WCN_Math.h` and link against `libwcn_math.a`.
+Include `WCN/WCN_Math.h` (a thin alias for `WCN/WCN_MATH_DST.h`) and link against `libwcn_math.a`.
+
+> **One API only.** There used to be a second, return-by-value API declared inline by
+> `WCN_Math.h`, selected by `WCN_USE_DST_MODE`. Both libraries implemented the same math
+> under the same symbol names with different calling conventions, so a mismatched build
+> linked cleanly and then corrupted the stack. Only the destination-out-param API is
+> maintained now; see [docs/MIGRATION.md](docs/MIGRATION.md) for the one-line rewrite rules.
 
 **C Example:**
 ```c
@@ -73,24 +65,24 @@ Include `WCN/WCN_Math.h` and link against `libwcn_math.a`.
 #include <stdio.h>
 
 int main() {
-    T$(Vec3) v1 = WMATH_CREATE(Vec3)((WMATH_CREATE_TYPE(Vec3)){
-        .v_x = 1.0f, .v_y = 2.0f, .v_z = 3.0f
-    });
-    T$(Vec3) v2 = WMATH_CREATE(Vec3)((WMATH_CREATE_TYPE(Vec3)){
-        .v_x = 4.0f, .v_y = 5.0f, .v_z = 6.0f
-    });
+    T$(Vec3) v1 = INIT$(Vec3, .v_x = 1.0f, .v_y = 2.0f, .v_z = 3.0f);
+    T$(Vec3) v2 = INIT$(Vec3, .v_x = 4.0f, .v_y = 5.0f, .v_z = 6.0f);
 
+    // Scalar-returning ops read the same as before
     float dot = WMATH_DOT(Vec3)(v1, v2);
-    T$(Vec3) cross = WMATH_CROSS(Vec3)(v1, v2);
-    T$(Vec3) normalized = WMATH_NORMALIZE(Vec3)(v1);
 
+    // Destination-out-param ops write into a value you own
+    T$(Vec3) cross;      WMATH_CROSS(Vec3)(&cross, v1, v2);
+    T$(Vec3) normalized; WMATH_NORMALIZE(Vec3)(&normalized, v1);
+
+    printf("dot = %f\n", dot);
     return 0;
 }
 ```
 
 **C++ Wrapper:**
 ```cpp
-#include "WCN/WCN_MATH_CPP.hpp"
+#include "WCN/WCN_MATH_DST_CPP.hpp"
 using namespace WCN::Math;
 
 Mat4 m1{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
@@ -98,7 +90,8 @@ Mat4 m2 = Mat4::scaling({2.0f, 2.0f, 2.0f});
 Mat4 result = m1 * m2;
 ```
 
-See `examples/` directory for more.
+See `examples/` directory for more. `examples/R.c` is the regression test — it exits
+non-zero when any check fails.
 
 ## Relationship with WCN
 

@@ -330,7 +330,7 @@ void WMATH_CALL(Mat3, from_quat)(DST_MAT3, WMATH_TYPE(Quat) q) {
     // 1. Load & Prep
     __m128 q_vec = __lsx_vld(q.v, 0);
     __m128 q2 = __lsx_vfadd_s(q_vec, q_vec);
-    __m128 one = __lsx_vldi(0x3F80);  // Load 1.0 directly (if imm supported) or splat
+    __m128 one = wcn_lsx_splat_f(1.0f);  // Load 1.0 directly (if imm supported) or splat
     // If vldi is specific to integer, use repl:
     if (1) {
         float f = 1.0f;
@@ -781,7 +781,7 @@ void WMATH_CALL(Mat4, from_quat)(DST_MAT4, WMATH_TYPE(Quat) q) {
     // LSX Broadcast Optimization
     __m128 q_vec = __lsx_vld(q.v, 0);
     __m128 q2 = __lsx_vfadd_s(q_vec, q_vec);
-    __m128 one = __lsx_vldi(0x3F80);  // 1.0f if imm valid, else repl
+    __m128 one = wcn_lsx_splat_f(1.0f);  // 1.0f if imm valid, else repl
     if (1) {
         float f = 1.0f;
         one = __lsx_vldrepl_w(&f, 0);
@@ -975,8 +975,8 @@ void WMATH_CALL(Vec2, transform_mat4)(DST_VEC2, WMATH_TYPE(Vec2) v, WMATH_TYPE(M
     __m128 res = _mm_fmadd_ps(col0, x_splat, col3);
     res = _mm_fmadd_ps(col1, y_splat, res);
 #else
-    __m128 res = _mm_add_ps(col3, _mm_mul_ps(col0, x_splat));
-    res = _mm_add_ps(res, _mm_mul_ps(col1, y_splat));
+    __m128 res = wcn_fma_mul_add_ps(col0, x_splat, col3);
+    res = wcn_fma_mul_add_ps(col1, y_splat, res);
 #endif
 
     // 5. Safe Store (8 bytes)
@@ -1065,8 +1065,8 @@ void WMATH_CALL(Vec2, transform_mat4)(DST_VEC2, WMATH_TYPE(Vec2) v, WMATH_TYPE(M
     // 1. Load inputs
     // Safe load 64-bit (2 floats) is tricky in pure LSX intrinsics without over-read.
     // We'll load scalar to be safe or assume padding. Let's use scalar load + repl.
-    __m128 x_splat = __lsx_vreplfr2vr_s(v.v[0]);
-    __m128 y_splat = __lsx_vreplfr2vr_s(v.v[1]);
+    __m128 x_splat = wcn_lsx_splat_f(v.v[0]);
+    __m128 y_splat = wcn_lsx_splat_f(v.v[1]);
 
     __m128 col0 = __lsx_vld(&m.m[0], 0);
     __m128 col1 = __lsx_vld(&m.m[4], 0);
@@ -1129,9 +1129,9 @@ void WMATH_CALL(Vec3, transform_mat4)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(M
     res = _mm_fmadd_ps(col1, y, res);
     res = _mm_fmadd_ps(col2, z, res);
 #else
-    __m128 res = _mm_add_ps(col3, _mm_mul_ps(col0, x));
-    res = _mm_add_ps(res, _mm_mul_ps(col1, y));
-    res = _mm_add_ps(res, _mm_mul_ps(col2, z));
+    __m128 res = wcn_fma_mul_add_ps(col0, x, col3);
+    res = wcn_fma_mul_add_ps(col1, y, res);
+    res = wcn_fma_mul_add_ps(col2, z, res);
 #endif
 
     // 5. 透视除法 (Perspective Divide)
@@ -1250,7 +1250,7 @@ void WMATH_CALL(Vec3, transform_mat4)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(M
     res = __riscv_vfmacc_vf_f32m1(res, z_val, col2, vl);
 
     // 4. 透视除法
-    float w = __riscv_vfmv_f_s_f32m1_f32(__riscv_vslidedown_vx_f32m1(res, res, 3, vl));
+    float w = wcn_rvv_lane(res, 3, vl);
     if (fabsf(w) < 1e-6f)
         w = 1.0f;
 
@@ -1259,8 +1259,8 @@ void WMATH_CALL(Vec3, transform_mat4)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(M
     // 5. 存储
     // 提取回标量存储最安全
     dst->v[0] = __riscv_vfmv_f_s_f32m1_f32(res);
-    dst->v[1] = __riscv_vfmv_f_s_f32m1_f32(__riscv_vslidedown_vx_f32m1(res, res, 1, vl));
-    dst->v[2] = __riscv_vfmv_f_s_f32m1_f32(__riscv_vslidedown_vx_f32m1(res, res, 2, vl));
+    dst->v[1] = wcn_rvv_lane(res, 1, vl);
+    dst->v[2] = wcn_rvv_lane(res, 2, vl);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // -----------------------------------------------------------------
@@ -1268,9 +1268,9 @@ void WMATH_CALL(Vec3, transform_mat4)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(M
     // -----------------------------------------------------------------
 
     // 1. 广播标量
-    __m128 x = __lsx_vreplfr2vr_s(v.v[0]);
-    __m128 y = __lsx_vreplfr2vr_s(v.v[1]);
-    __m128 z = __lsx_vreplfr2vr_s(v.v[2]);
+    __m128 x = wcn_lsx_splat_f(v.v[0]);
+    __m128 y = wcn_lsx_splat_f(v.v[1]);
+    __m128 z = wcn_lsx_splat_f(v.v[2]);
 
     // 2. 加载列
     __m128 col0 = __lsx_vld(&m.m[0], 0);
@@ -1292,7 +1292,7 @@ void WMATH_CALL(Vec3, transform_mat4)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(M
 
     if (fabsf(w_val) < 1e-6f)
         w_val = 1.0f;
-    res = __lsx_vfmul_s(res, __lsx_vreplfr2vr_s(1.0f / w_val));
+    res = __lsx_vfmul_s(res, wcn_lsx_splat_f(1.0f / w_val));
 
     // 5. 存储
     __lsx_vstelm_w(res, dst->v, 0, 0);
@@ -1353,8 +1353,8 @@ void WMATH_CALL(Vec3, transform_mat4_upper3x3)(DST_VEC3, WMATH_TYPE(Vec3) v, WMA
     res = _mm_fmadd_ps(col2, z_splat, res);
 #else
     __m128 res = _mm_mul_ps(col0, x_splat);
-    res = _mm_add_ps(res, _mm_mul_ps(col1, y_splat));
-    res = _mm_add_ps(res, _mm_mul_ps(col2, z_splat));
+    res = wcn_fma_mul_add_ps(col1, y_splat, res);
+    res = wcn_fma_mul_add_ps(col2, z_splat, res);
 #endif
 
     // 5. Safe Store (12 bytes)
@@ -1452,9 +1452,9 @@ void WMATH_CALL(Vec3, transform_mat4_upper3x3)(DST_VEC3, WMATH_TYPE(Vec3) v, WMA
     // -----------------------------------------------------------------
     // LoongArch LSX
     // -----------------------------------------------------------------
-    __m128 x_splat = __lsx_vreplfr2vr_s(v.v[0]);
-    __m128 y_splat = __lsx_vreplfr2vr_s(v.v[1]);
-    __m128 z_splat = __lsx_vreplfr2vr_s(v.v[2]);
+    __m128 x_splat = wcn_lsx_splat_f(v.v[0]);
+    __m128 y_splat = wcn_lsx_splat_f(v.v[1]);
+    __m128 z_splat = wcn_lsx_splat_f(v.v[2]);
 
     __m128 col0 = __lsx_vld(&m.m[0], 0);
     __m128 col1 = __lsx_vld(&m.m[4], 0);
@@ -1505,8 +1505,8 @@ void WMATH_CALL(Vec3, transform_mat3)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(M
     res = _mm_fmadd_ps(col1, y, res);
     res = _mm_fmadd_ps(col2, z, res);
 #else
-    res = _mm_add_ps(res, _mm_mul_ps(col1, y));
-    res = _mm_add_ps(res, _mm_mul_ps(col2, z));
+    res = wcn_fma_mul_add_ps(col1, y, res);
+    res = wcn_fma_mul_add_ps(col2, z, res);
 #endif
 
     wcn_store_vec3_partial(dst->v, res);
@@ -1561,8 +1561,8 @@ void WMATH_CALL(Vec3, transform_mat3)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(M
 
     // Extract scalars (0, 1, 2)
     float x_val = __riscv_vfmv_f_s_f32m1_f32(vec_v);
-    float y_val = __riscv_vfmv_f_s_f32m1_f32(__riscv_vslidedown_vx_f32m1(vec_v, vec_v, 1, vl));
-    float z_val = __riscv_vfmv_f_s_f32m1_f32(__riscv_vslidedown_vx_f32m1(vec_v, vec_v, 2, vl));
+    float y_val = wcn_rvv_lane(vec_v, 1, vl);
+    float z_val = wcn_rvv_lane(vec_v, 2, vl);
 
     // r = col0 * x
     vfloat32m1_t res = __riscv_vfmul_vf_f32m1(col0, x_val, vl);
@@ -1624,11 +1624,11 @@ void WMATH_CALL(Vec3, transform_quat)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(Q
     __m128 v_yzx = _mm_shuffle_ps(v_vec, v_vec, _MM_SHUFFLE(3, 0, 2, 1));
     __m128 v_zxy = _mm_shuffle_ps(v_vec, v_vec, _MM_SHUFFLE(3, 1, 0, 2));
 
-    __m128 uv = _mm_sub_ps(_mm_mul_ps(q_yzx, v_zxy), _mm_mul_ps(q_zxy, v_yzx));
+    __m128 uv = wcn_fma_mul_sub_ps(q_yzx, v_zxy, _mm_mul_ps(q_zxy, v_yzx));
 
     __m128 uv_yzx = _mm_shuffle_ps(uv, uv, _MM_SHUFFLE(3, 0, 2, 1));
     __m128 uv_zxy = _mm_shuffle_ps(uv, uv, _MM_SHUFFLE(3, 1, 0, 2));
-    __m128 uuv = _mm_sub_ps(_mm_mul_ps(q_yzx, uv_zxy), _mm_mul_ps(q_zxy, uv_yzx));
+    __m128 uuv = wcn_fma_mul_sub_ps(q_yzx, uv_zxy, _mm_mul_ps(q_zxy, uv_yzx));
 
     // 这里用 q_w（而不是 2*q_w）
     __m128 q_w = _mm_shuffle_ps(q_vec, q_vec, _MM_SHUFFLE(3, 3, 3, 3));
@@ -1651,11 +1651,11 @@ void WMATH_CALL(Vec3, transform_quat)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(Q
     float32x4_t v_yzx = vextq_f32(v_vec, v_vec, 1);
     float32x4_t v_zxy = vextq_f32(v_vec, v_vec, 2);
 
-    float32x4_t uv = vsubq_f32(vmulq_f32(q_yzx, v_zxy), vmulq_f32(q_zxy, v_yzx));
+    float32x4_t uv = vfmsq_f32(q_yzx, v_zxy, vmulq_f32(q_zxy, v_yzx));
 
     float32x4_t uv_yzx = vextq_f32(uv, uv, 1);
     float32x4_t uv_zxy = vextq_f32(uv, uv, 2);
-    float32x4_t uuv = vsubq_f32(vmulq_f32(q_yzx, uv_zxy), vmulq_f32(q_zxy, uv_yzx));
+    float32x4_t uuv = vfmsq_f32(q_yzx, uv_zxy, vmulq_f32(q_zxy, uv_yzx));
 
     float32x4_t q_w = vdupq_n_f32(vgetq_lane_f32(q_vec, 3));
     float32x4_t t1 = vmulq_f32(q_w, uv);
@@ -1698,38 +1698,38 @@ void WMATH_CALL(Vec3, transform_quat)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(Q
     vfloat32m1_t q_vec = __riscv_vle32_v_f32m1(q.v, 4);
 
     // Create shuffled vectors for quaternion operations
-    float q_vals[4] = {__riscv_vfmv_f_s_f32m1(q_vec, 3), __riscv_vfmv_f_s_f32m1(q_vec, 0),
-                       __riscv_vfmv_f_s_f32m1(q_vec, 2), __riscv_vfmv_f_s_f32m1(q_vec, 1)};
+    float q_vals[4] = {wcn_rvv_lane4(q_vec, 3), wcn_rvv_lane4(q_vec, 0),
+                       wcn_rvv_lane4(q_vec, 2), wcn_rvv_lane4(q_vec, 1)};
     vfloat32m1_t q_yzx = __riscv_vle32_v_f32m1(q_vals, 4);
 
-    float q_vals2[4] = {__riscv_vfmv_f_s_f32m1(q_vec, 3), __riscv_vfmv_f_s_f32m1(q_vec, 1),
-                        __riscv_vfmv_f_s_f32m1(q_vec, 0), __riscv_vfmv_f_s_f32m1(q_vec, 2)};
+    float q_vals2[4] = {wcn_rvv_lane4(q_vec, 3), wcn_rvv_lane4(q_vec, 1),
+                        wcn_rvv_lane4(q_vec, 0), wcn_rvv_lane4(q_vec, 2)};
     vfloat32m1_t q_zxy = __riscv_vle32_v_f32m1(q_vals2, 4);
 
-    float v_vals[4] = {__riscv_vfmv_f_s_f32m1(v_vec, 3), __riscv_vfmv_f_s_f32m1(v_vec, 0),
-                       __riscv_vfmv_f_s_f32m1(v_vec, 2), __riscv_vfmv_f_s_f32m1(v_vec, 1)};
+    float v_vals[4] = {wcn_rvv_lane4(v_vec, 3), wcn_rvv_lane4(v_vec, 0),
+                       wcn_rvv_lane4(v_vec, 2), wcn_rvv_lane4(v_vec, 1)};
     vfloat32m1_t v_yzx = __riscv_vle32_v_f32m1(v_vals, 4);
 
-    float v_vals2[4] = {__riscv_vfmv_f_s_f32m1(v_vec, 3), __riscv_vfmv_f_s_f32m1(v_vec, 1),
-                        __riscv_vfmv_f_s_f32m1(v_vec, 0), __riscv_vfmv_f_s_f32m1(v_vec, 2)};
+    float v_vals2[4] = {wcn_rvv_lane4(v_vec, 3), wcn_rvv_lane4(v_vec, 1),
+                        wcn_rvv_lane4(v_vec, 0), wcn_rvv_lane4(v_vec, 2)};
     vfloat32m1_t v_zxy = __riscv_vle32_v_f32m1(v_vals2, 4);
 
     vfloat32m1_t uv = __riscv_vfsub_vv_f32m1(__riscv_vfmul_vv_f32m1(q_yzx, v_zxy, 4),
                                              __riscv_vfmul_vv_f32m1(q_zxy, v_yzx, 4), 4);
 
-    float uv_vals[4] = {__riscv_vfmv_f_s_f32m1(uv, 3), __riscv_vfmv_f_s_f32m1(uv, 0),
-                        __riscv_vfmv_f_s_f32m1(uv, 2), __riscv_vfmv_f_s_f32m1(uv, 1)};
+    float uv_vals[4] = {wcn_rvv_lane4(uv, 3), wcn_rvv_lane4(uv, 0),
+                        wcn_rvv_lane4(uv, 2), wcn_rvv_lane4(uv, 1)};
     vfloat32m1_t uv_yzx = __riscv_vle32_v_f32m1(uv_vals, 4);
 
-    float uv_vals2[4] = {__riscv_vfmv_f_s_f32m1(uv, 3), __riscv_vfmv_f_s_f32m1(uv, 1),
-                         __riscv_vfmv_f_s_f32m1(uv, 0), __riscv_vfmv_f_s_f32m1(uv, 2)};
+    float uv_vals2[4] = {wcn_rvv_lane4(uv, 3), wcn_rvv_lane4(uv, 1),
+                         wcn_rvv_lane4(uv, 0), wcn_rvv_lane4(uv, 2)};
     vfloat32m1_t uv_zxy = __riscv_vle32_v_f32m1(uv_vals2, 4);
 
     vfloat32m1_t uuv = __riscv_vfsub_vv_f32m1(__riscv_vfmul_vv_f32m1(q_yzx, uv_zxy, 4),
                                               __riscv_vfmul_vv_f32m1(q_zxy, uv_yzx, 4), 4);
 
     // 这里用 q_w（而不是 2*q_w）
-    vfloat32m1_t q_w = __riscv_vfmv_v_f_f32m1(__riscv_vfmv_f_s_f32m1(q_vec, 3), 4);
+    vfloat32m1_t q_w = __riscv_vfmv_v_f_f32m1(wcn_rvv_lane4(q_vec, 3), 4);
     vfloat32m1_t t1 = __riscv_vfmul_vv_f32m1(q_w, uv, 4);  // q.w * uv
     vfloat32m1_t t2 = __riscv_vfadd_vv_f32m1(t1, uuv, 4);  // q.w*uv + uuv
     vfloat32m1_t t3 = __riscv_vfadd_vv_f32m1(t2, t2, 4);   // 2 * (q.w*uv + uuv)
@@ -1755,7 +1755,7 @@ void WMATH_CALL(Vec3, transform_quat)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(Q
     __m128 uuv = __lsx_vfsub_s(__lsx_vfmul_s(q_yzx, uv_zxy), __lsx_vfmul_s(q_zxy, uv_yzx));
 
     // 这里用 q_w（而不是 2*q_w）
-    __m128 q_w = __lsx_vreplfr2vr_s(__lsx_vpickve2gr_w(q_vec, 3));
+    __m128 q_w = wcn_lsx_splat_f(__lsx_vpickve2gr_w(q_vec, 3));
     __m128 t1 = __lsx_vfmul_s(q_w, uv);  // q.w * uv
     __m128 t2 = __lsx_vfadd_s(t1, uuv);  // q.w*uv + uuv
     __m128 t3 = __lsx_vfadd_s(t2, t2);   // 2 * (q.w*uv + uuv)
@@ -1785,6 +1785,10 @@ void WMATH_CALL(Vec3, transform_quat)(DST_VEC3, WMATH_TYPE(Vec3) v, WMATH_TYPE(Q
 
 // Quat fromMat
 void WMATH_CALL(Quat, from_mat4)(DST_QUAT, WMATH_TYPE(Mat4) m) {
+    /* Scalar on every backend, structurally: the branch taken depends on which
+     * diagonal element is largest, so the code path itself is data-dependent.
+     * There is no fixed lane assignment to widen, and each path is a scalar sqrt
+     * plus a reciprocal. Same reasoning applies to from_mat3 below. */
     const float trace = m.m[0] + m.m[5] + m.m[10];
     if (trace > 0.0) {
         const float root = sqrtf(trace + 1.0f);
@@ -1815,6 +1819,10 @@ void WMATH_CALL(Quat, from_mat4)(DST_QUAT, WMATH_TYPE(Mat4) m) {
 }
 
 void WMATH_CALL(Quat, from_mat3)(DST_QUAT, WMATH_TYPE(Mat3) m) {
+    /* Scalar on every backend for the same structural reason as from_mat4: the
+     * largest diagonal element selects which of four code paths runs, so the lane
+     * assignment would differ per input and there is nothing fixed to widen. Each
+     * path is a scalar sqrt plus a reciprocal. */
     const float trace = m.m[0] + m.m[5] + m.m[10];
     if (trace > 0.0) {
         const float root = sqrtf(trace + 1.0f);
@@ -1961,7 +1969,7 @@ void WMATH_CALL(Quat, from_euler)(DST_QUAT, float x_angle_in_radians, float y_an
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     if (WCN_MATH_IS_VALID_ROTATION_ORDER(order)) {
         const int* signs = WCN_MATH_ROTATION_SIGN_TABLE[order];
-        size_t vl = vsetvlmax_e32m1();
+        size_t vl = __riscv_vsetvlmax_e32m1();
 
         // 构建向量进行并行计算
         float sz_cz_cz_cz_data[4] = {s_z, c_z, c_z, c_z};
@@ -1972,29 +1980,29 @@ void WMATH_CALL(Quat, from_euler)(DST_QUAT, float x_angle_in_radians, float y_an
         float sx_cx_sx_sx_data[4] = {s_x, c_x, s_x, s_x};
         float sy_sy_cy_sy_data[4] = {s_y, c_y, s_y, s_y};
 
-        vfloat32m1_t sz_cz_cz_cz = vle32_v_f32m1(sz_cz_cz_cz_data, vl);
-        vfloat32m1_t cx_sx_cx_cx = vle32_v_f32m1(cx_sx_cx_cx_data, vl);
-        vfloat32m1_t cy_cy_sy_cy = vle32_v_f32m1(cy_cy_sy_cy_data, vl);
+        vfloat32m1_t sz_cz_cz_cz = __riscv_vle32_v_f32m1(sz_cz_cz_cz_data, vl);
+        vfloat32m1_t cx_sx_cx_cx = __riscv_vle32_v_f32m1(cx_sx_cx_cx_data, vl);
+        vfloat32m1_t cy_cy_sy_cy = __riscv_vle32_v_f32m1(cy_cy_sy_cy_data, vl);
 
-        vfloat32m1_t cz_sz_sz_sz = vle32_v_f32m1(cz_sz_sz_sz_data, vl);
-        vfloat32m1_t sx_cx_sx_sx = vle32_v_f32m1(sx_cx_sx_sx_data, vl);
-        vfloat32m1_t sy_sy_cy_sy = vle32_v_f32m1(sy_sy_cy_sy_data, vl);
+        vfloat32m1_t cz_sz_sz_sz = __riscv_vle32_v_f32m1(cz_sz_sz_sz_data, vl);
+        vfloat32m1_t sx_cx_sx_sx = __riscv_vle32_v_f32m1(sx_cx_sx_sx_data, vl);
+        vfloat32m1_t sy_sy_cy_sy = __riscv_vle32_v_f32m1(sy_sy_cy_sy_data, vl);
 
         // 计算 A 和 B 部分
         vfloat32m1_t A =
-            vfmul_vv_f32m1(vfmul_vv_f32m1(sz_cz_cz_cz, cx_sx_cx_cx, vl), cy_cy_sy_cy, vl);
+            __riscv_vfmul_vv_f32m1(__riscv_vfmul_vv_f32m1(sz_cz_cz_cz, cx_sx_cx_cx, vl), cy_cy_sy_cy, vl);
         vfloat32m1_t B =
-            vfmul_vv_f32m1(vfmul_vv_f32m1(cz_sz_sz_sz, sx_cx_sx_sx, vl), sy_sy_cy_sy, vl);
+            __riscv_vfmul_vv_f32m1(__riscv_vfmul_vv_f32m1(cz_sz_sz_sz, sx_cx_sx_sx, vl), sy_sy_cy_sy, vl);
 
         // 应用符号
         float signs_vec_data[4] = {(float)signs[0], (float)signs[1], (float)signs[2],
                                    (float)signs[3]};
-        vfloat32m1_t signs_vec = vle32_v_f32m1(signs_vec_data, vl);
-        B = vfmul_vv_f32m1(B, signs_vec, vl);
+        vfloat32m1_t signs_vec = __riscv_vle32_v_f32m1(signs_vec_data, vl);
+        B = __riscv_vfmul_vv_f32m1(B, signs_vec, vl);
 
         // 最终结果
-        vfloat32m1_t result = vfadd_vv_f32m1(A, B, vl);
-        vse32_v_f32m1(dst->v, result, vl);
+        vfloat32m1_t result = __riscv_vfadd_vv_f32m1(A, B, vl);
+        __riscv_vse32_v_f32m1(dst->v, result, vl);
     } else {
         dst->v[0] = 0.0f;
         dst->v[1] = 0.0f;
@@ -2006,49 +2014,49 @@ void WMATH_CALL(Quat, from_euler)(DST_QUAT, float x_angle_in_radians, float y_an
         const int* signs = WCN_MATH_ROTATION_SIGN_TABLE[order];
 
         // 构建向量进行并行计算
-        __m128 sz_cz_cz_cz = __lsx_vreplfr2vr_s(s_z);
+        __m128 sz_cz_cz_cz = wcn_lsx_splat_f(s_z);
         sz_cz_cz_cz = __lsx_vinsgr2vr_w(sz_cz_cz_cz, __builtin_bit_cast(float, (uint32_t)c_z), 1);
         sz_cz_cz_cz = __lsx_vinsgr2vr_w(sz_cz_cz_cz, __builtin_bit_cast(float, (uint32_t)c_z), 2);
         sz_cz_cz_cz = __lsx_vinsgr2vr_w(sz_cz_cz_cz, __builtin_bit_cast(float, (uint32_t)c_z), 3);
 
-        __m128 cx_sx_cx_cx = __lsx_vreplfr2vr_s(c_x);
+        __m128 cx_sx_cx_cx = wcn_lsx_splat_f(c_x);
         cx_sx_cx_cx = __lsx_vinsgr2vr_w(cx_sx_cx_cx, __builtin_bit_cast(float, (uint32_t)s_x), 1);
         cx_sx_cx_cx = __lsx_vinsgr2vr_w(cx_sx_cx_cx, __builtin_bit_cast(float, (uint32_t)c_x), 2);
         cx_sx_cx_cx = __lsx_vinsgr2vr_w(cx_sx_cx_cx, __builtin_bit_cast(float, (uint32_t)c_x), 3);
 
-        __m128 cy_cy_sy_cy = __lsx_vreplfr2vr_s(c_y);
+        __m128 cy_cy_sy_cy = wcn_lsx_splat_f(c_y);
         cy_cy_sy_cy = __lsx_vinsgr2vr_w(cy_cy_sy_cy, __builtin_bit_cast(float, (uint32_t)c_y), 1);
         cy_cy_sy_cy = __lsx_vinsgr2vr_w(cy_cy_sy_cy, __builtin_bit_cast(float, (uint32_t)s_y), 2);
         cy_cy_sy_cy = __lsx_vinsgr2vr_w(cy_cy_sy_cy, __builtin_bit_cast(float, (uint32_t)c_y), 3);
 
-        __m128 cz_sz_sz_sz = __lsx_vreplfr2vr_s(c_z);
+        __m128 cz_sz_sz_sz = wcn_lsx_splat_f(c_z);
         cz_sz_sz_sz = __lsx_vinsgr2vr_w(cz_sz_sz_sz, __builtin_bit_cast(float, (uint32_t)s_z), 1);
         cz_sz_sz_sz = __lsx_vinsgr2vr_w(cz_sz_sz_sz, __builtin_bit_cast(float, (uint32_t)s_z), 2);
         cz_sz_sz_sz = __lsx_vinsgr2vr_w(cz_sz_sz_sz, __builtin_bit_cast(float, (uint32_t)s_z), 3);
 
-        __m128 sx_cx_sx_sx = __lsx_vreplfr2vr_s(s_x);
+        __m128 sx_cx_sx_sx = wcn_lsx_splat_f(s_x);
         sx_cx_sx_sx = __lsx_vinsgr2vr_w(sx_cx_sx_sx, __builtin_bit_cast(float, (uint32_t)c_x), 1);
         sx_cx_sx_sx = __lsx_vinsgr2vr_w(sx_cx_sx_sx, __builtin_bit_cast(float, (uint32_t)s_x), 2);
         sx_cx_sx_sx = __lsx_vinsgr2vr_w(sx_cx_sx_sx, __builtin_bit_cast(float, (uint32_t)s_x), 3);
 
-        __m128 sy_sy_cy_sy = __lsx_vreplfr2vr_s(s_y);
+        __m128 sy_sy_cy_sy = wcn_lsx_splat_f(s_y);
         sy_sy_cy_sy = __lsx_vinsgr2vr_w(sy_sy_cy_sy, __builtin_bit_cast(float, (uint32_t)c_y), 1);
         sy_sy_cy_sy = __lsx_vinsgr2vr_w(sy_sy_cy_sy, __builtin_bit_cast(float, (uint32_t)s_y), 2);
         sy_sy_cy_sy = __lsx_vinsgr2vr_w(sy_sy_cy_sy, __builtin_bit_cast(float, (uint32_t)s_y), 3);
 
         // 计算 A 和 B 部分
-        __m128 A = __lsx_fmul_s(__lsx_fmul_s(sz_cz_cz_cz, cx_sx_cx_cx), cy_cy_sy_cy);
-        __m128 B = __lsx_fmul_s(__lsx_fmul_s(cz_sz_sz_sz, sx_cx_sx_sx), sy_sy_cy_sy);
+        __m128 A = __lsx_vfmul_s(__lsx_vfmul_s(sz_cz_cz_cz, cx_sx_cx_cx), cy_cy_sy_cy);
+        __m128 B = __lsx_vfmul_s(__lsx_vfmul_s(cz_sz_sz_sz, sx_cx_sx_sx), sy_sy_cy_sy);
 
         // 应用符号
         __m128 signs_vec = __lsx_vreplgr2vr_w(__builtin_bit_cast(float, (uint32_t)signs[0]));
         signs_vec = __lsx_vinsgr2vr_w(signs_vec, __builtin_bit_cast(float, (uint32_t)signs[1]), 1);
         signs_vec = __lsx_vinsgr2vr_w(signs_vec, __builtin_bit_cast(float, (uint32_t)signs[2]), 2);
         signs_vec = __lsx_vinsgr2vr_w(signs_vec, __builtin_bit_cast(float, (uint32_t)signs[3]), 3);
-        B = __lsx_fmul_s(B, signs_vec);
+        B = __lsx_vfmul_s(B, signs_vec);
 
         // 最终结果
-        __m128 result = __lsx_fadd_s(A, B);
+        __m128 result = __lsx_vfadd_s(A, B);
         __lsx_vst(result, dst->v, 0);
     } else {
         dst->v[0] = 0.0f;
@@ -2157,25 +2165,25 @@ void WMATH_CALL(Vec3, get_scale)(DST_VEC3, WMATH_TYPE(Mat4) m) {
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // RISC-V Vector implementation - parallel computation of three column square sums
-    size_t vl = vsetvlmax_e32m1();
+    size_t vl = __riscv_vsetvlmax_e32m1();
 
     float col_x_data[4] = {m.m[0], m.m[1], m.m[2], 0.0f};
     float col_y_data[4] = {m.m[4], m.m[5], m.m[6], 0.0f};
     float col_z_data[4] = {m.m[8], m.m[9], m.m[10], 0.0f};
 
-    vfloat32m1_t col_x = vle32_v_f32m1(col_x_data, vl);
-    vfloat32m1_t col_y = vle32_v_f32m1(col_y_data, vl);
-    vfloat32m1_t col_z = vle32_v_f32m1(col_z_data, vl);
+    vfloat32m1_t col_x = __riscv_vle32_v_f32m1(col_x_data, vl);
+    vfloat32m1_t col_y = __riscv_vle32_v_f32m1(col_y_data, vl);
+    vfloat32m1_t col_z = __riscv_vle32_v_f32m1(col_z_data, vl);
 
     // Square each element
-    vfloat32m1_t sq_x = vfmul_vv_f32m1(col_x, col_x, vl);
-    vfloat32m1_t sq_y = vfmul_vv_f32m1(col_y, col_y, vl);
-    vfloat32m1_t sq_z = vfmul_vv_f32m1(col_z, col_z, vl);
+    vfloat32m1_t sq_x = __riscv_vfmul_vv_f32m1(col_x, col_x, vl);
+    vfloat32m1_t sq_y = __riscv_vfmul_vv_f32m1(col_y, col_y, vl);
+    vfloat32m1_t sq_z = __riscv_vfmul_vv_f32m1(col_z, col_z, vl);
 
     // Horizontally add to get a sum of squares for each column
-    float sum_x = wcn_hadd_riscv(sq_x, vl);
-    float sum_y = wcn_hadd_riscv(sq_y, vl);
-    float sum_z = wcn_hadd_riscv(sq_z, vl);
+    float sum_x = wcn_hadd_f32(sq_x);
+    float sum_y = wcn_hadd_f32(sq_y);
+    float sum_z = wcn_hadd_f32(sq_z);
 
     // Take square root
     dst->v[0] = sqrtf(sum_x);
@@ -2184,30 +2192,30 @@ void WMATH_CALL(Vec3, get_scale)(DST_VEC3, WMATH_TYPE(Mat4) m) {
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - parallel computation of three column square sums
-    __m128 col_x = __lsx_vreplfr2vr_s(m.m[0]);
+    __m128 col_x = wcn_lsx_splat_f(m.m[0]);
     col_x = __lsx_vinsgr2vr_w(col_x, __builtin_bit_cast(float, (uint32_t)m.m[1]), 1);
     col_x = __lsx_vinsgr2vr_w(col_x, __builtin_bit_cast(float, (uint32_t)m.m[2]), 2);
     col_x = __lsx_vinsgr2vr_w(col_x, 0, 3);
 
-    __m128 col_y = __lsx_vreplfr2vr_s(m.m[4]);
+    __m128 col_y = wcn_lsx_splat_f(m.m[4]);
     col_y = __lsx_vinsgr2vr_w(col_y, __builtin_bit_cast(float, (uint32_t)m.m[5]), 1);
     col_y = __lsx_vinsgr2vr_w(col_y, __builtin_bit_cast(float, (uint32_t)m.m[6]), 2);
     col_y = __lsx_vinsgr2vr_w(col_y, 0, 3);
 
-    __m128 col_z = __lsx_vreplfr2vr_s(m.m[8]);
+    __m128 col_z = wcn_lsx_splat_f(m.m[8]);
     col_z = __lsx_vinsgr2vr_w(col_z, __builtin_bit_cast(float, (uint32_t)m.m[9]), 1);
     col_z = __lsx_vinsgr2vr_w(col_z, __builtin_bit_cast(float, (uint32_t)m.m[10]), 2);
     col_z = __lsx_vinsgr2vr_w(col_z, 0, 3);
 
     // Square each element
-    __m128 sq_x = __lsx_fmul_s(col_x, col_x);
-    __m128 sq_y = __lsx_fmul_s(col_y, col_y);
-    __m128 sq_z = __lsx_fmul_s(col_z, col_z);
+    __m128 sq_x = __lsx_vfmul_s(col_x, col_x);
+    __m128 sq_y = __lsx_vfmul_s(col_y, col_y);
+    __m128 sq_z = __lsx_vfmul_s(col_z, col_z);
 
     // Horizontally add to get a sum of squares for each column
-    float sum_x = wcn_hadd_loongarch(sq_x);
-    float sum_y = wcn_hadd_loongarch(sq_y);
-    float sum_z = wcn_hadd_loongarch(sq_z);
+    float sum_x = wcn_hadd_f32(sq_x);
+    float sum_y = wcn_hadd_f32(sq_y);
+    float sum_z = wcn_hadd_f32(sq_z);
 
     // Take square root
     dst->v[0] = sqrtf(sum_x);
@@ -2256,10 +2264,10 @@ void WMATH_ROTATE_X(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
     __m128 v_s = _mm_set1_ps(s);
 
     // y' = c*py - s*pz   -> vector: [y', y', y', y']
-    __m128 v_y = _mm_sub_ps(_mm_mul_ps(v_py, v_c), _mm_mul_ps(v_pz, v_s));
+    __m128 v_y = wcn_fma_mul_sub_ps(v_py, v_c, _mm_mul_ps(v_pz, v_s));
 
     // z' = s*py + c*pz  -> vector: [z', z', z', z']
-    __m128 v_z = _mm_add_ps(_mm_mul_ps(v_py, v_s), _mm_mul_ps(v_pz, v_c));
+    __m128 v_z = wcn_fma_mul_add_ps(v_py, v_s, _mm_mul_ps(v_pz, v_c));
 
     // rx duplicated: [px, px, px, px]
     __m128 v_rx = _mm_shuffle_ps(vp, vp, _MM_SHUFFLE(0, 0, 0, 0));
@@ -2298,8 +2306,8 @@ void WMATH_ROTATE_X(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
     float32x4_t v_c = vdupq_n_f32(c);
     float32x4_t v_s = vdupq_n_f32(s);
 
-    float32x4_t v_y = vsubq_f32(vmulq_f32(v_py, v_c), vmulq_f32(v_pz, v_s));  // [y',y',y',y']
-    float32x4_t v_z = vaddq_f32(vmulq_f32(v_py, v_s), vmulq_f32(v_pz, v_c));  // [z',z',z',z']
+    float32x4_t v_y = vfmsq_f32(v_py, v_c, vmulq_f32(v_pz, v_s));  // [y',y',y',y']
+    float32x4_t v_z = vfmaq_f32(vmulq_f32(v_pz, v_c), v_py, v_s);  // [z',z',z',z']
 
     // Build [rx, y', z', 0]
     // v_low  = [rx, y', rx, y']  via vzip or combine:
@@ -2365,47 +2373,47 @@ void WMATH_ROTATE_X(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
 
     // --- RISC-V Vector implementation ---
-    size_t vl = vsetvlmax_e32m1();
-    vfloat32m1_t va = wcn_load_vec3_partial_riscv(a.v, vl);  // [px, py, pz, 0]
-    vfloat32m1_t vb = wcn_load_vec3_partial_riscv(b.v, vl);
-    vfloat32m1_t vp = vfsub_vv_f32m1(va, vb, vl);
+    size_t vl = __riscv_vsetvlmax_e32m1();
+    vfloat32m1_t va = wcn_load_vec3_partial(a.v);  // [px, py, pz, 0]
+    vfloat32m1_t vb = wcn_load_vec3_partial(b.v);
+    vfloat32m1_t vp = __riscv_vfsub_vv_f32m1(va, vb, vl);
 
     // Extract values and use them in computation
-    float px = vfmv_f_s_f32m1_e32m1(vp, 0);
-    float py = vfmv_f_s_f32m1_e32m1(vp, 1);
-    float pz = vfmv_f_s_f32m1_e32m1(vp, 2);
+    float px = wcn_rvv_lane(vp, 0, vl);
+    float py = wcn_rvv_lane(vp, 1, vl);
+    float pz = wcn_rvv_lane(vp, 2, vl);
 
     // Compute results
     float y_new = c * py - s * pz;
     float z_new = s * py + c * pz;
 
-    vfloat32m1_t vres = vfmv_v_f_f32m1(0.0f, vl);
-    vres = vfmv_s_f32m1_e32m1(vres, px, 0, vl);
-    vres = vfmv_s_f32m1_e32m1(vres, y_new, 1, vl);
-    vres = vfmv_s_f32m1_e32m1(vres, z_new, 2, vl);
+    vfloat32m1_t vres = __riscv_vfmv_v_f_f32m1(0.0f, vl);
+    vres = wcn_rvv_set_lane(vres, px, 0, vl);
+    vres = wcn_rvv_set_lane(vres, y_new, 1, vl);
+    vres = wcn_rvv_set_lane(vres, z_new, 2, vl);
 
     // add center and store
-    vres = vfadd_vv_f32m1(vres, vb, vl);
-    wcn_store_vec3_partial_riscv(dst->v, vres, vl);
+    vres = __riscv_vfadd_vv_f32m1(vres, vb, vl);
+    wcn_store_vec3_partial(dst->v, vres);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
 
     // --- LoongArch LSX implementation ---
-    __m128 va = wcn_load_vec3_partial_loongarch(a.v);  // [px, py, pz, 0]
-    __m128 vb = wcn_load_vec3_partial_loongarch(b.v);
+    __m128 va = wcn_load_vec3_partial(a.v);  // [px, py, pz, 0]
+    __m128 vb = wcn_load_vec3_partial(b.v);
     __m128 vp = __lsx_vfsub_s(va, vb);
 
     // Extract lanes and broadcast
-    float px = __lsx_vpickve2gr_w_s(vp, 0);
-    float py = __lsx_vpickve2gr_w_s(vp, 1);
-    float pz = __lsx_vpickve2gr_w_s(vp, 2);
+    float px = wcn_lsx_extract_f(vp, 0);
+    float py = wcn_lsx_extract_f(vp, 1);
+    float pz = wcn_lsx_extract_f(vp, 2);
 
-    __m128 v_rx = __lsx_vreplfr2vr_s(px);
-    __m128 v_py = __lsx_vreplfr2vr_s(py);
-    __m128 v_pz = __lsx_vreplfr2vr_s(pz);
+    __m128 v_rx = wcn_lsx_splat_f(px);
+    __m128 v_py = wcn_lsx_splat_f(py);
+    __m128 v_pz = wcn_lsx_splat_f(pz);
 
-    __m128 v_c = __lsx_vreplfr2vr_s(c);
-    __m128 v_s = __lsx_vreplfr2vr_s(s);
+    __m128 v_c = wcn_lsx_splat_f(c);
+    __m128 v_s = wcn_lsx_splat_f(s);
 
     __m128 v_y =
         __lsx_vfsub_s(__lsx_vfmul_s(v_py, v_c), __lsx_vfmul_s(v_pz, v_s));  // [y',y',y',y']
@@ -2413,8 +2421,8 @@ void WMATH_ROTATE_X(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
         __lsx_vfadd_s(__lsx_vfmul_s(v_py, v_s), __lsx_vfmul_s(v_pz, v_c));  // [z',z',z',z']
 
     // Build [rx, y', z', 0]
-    float y_s = __lsx_vpickve2gr_w_s(v_y, 0);
-    float z_s = __lsx_vpickve2gr_w_s(v_z, 0);
+    float y_s = wcn_lsx_extract_f(v_y, 0);
+    float z_s = wcn_lsx_extract_f(v_z, 0);
 
     __m128 vres = __lsx_vinsgr2vr_w(
         __lsx_vinsgr2vr_w(__lsx_vinsgr2vr_w(__lsx_vldrepl_w(&(float){0.0f}, 0), px, 0), y_s, 1),
@@ -2422,7 +2430,7 @@ void WMATH_ROTATE_X(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
 
     // add center and store
     vres = __lsx_vfadd_s(vres, vb);
-    wcn_store_vec3_partial_loongarch(dst->v, vres);
+    wcn_store_vec3_partial(dst->v, vres);
 
 #else
 
@@ -2465,10 +2473,10 @@ void WMATH_ROTATE_Y(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
     __m128 v_zero = _mm_setzero_ps();
 
     // x' = x*c + z*s
-    __m128 v_x = _mm_add_ps(_mm_mul_ps(v_px, v_c), _mm_mul_ps(v_pz, v_s));
+    __m128 v_x = wcn_fma_mul_add_ps(v_px, v_c, _mm_mul_ps(v_pz, v_s));
 
     // z' = -x*s + z*c
-    __m128 v_z = _mm_add_ps(_mm_mul_ps(v_px, v_ns), _mm_mul_ps(v_pz, v_c));
+    __m128 v_z = wcn_fma_mul_add_ps(v_px, v_ns, _mm_mul_ps(v_pz, v_c));
 
     // Combine into [x', y, z', 0]
     // v_low = [x', y, x', y]
@@ -2503,9 +2511,9 @@ void WMATH_ROTATE_Y(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
     float32x4_t v_ns = vdupq_n_f32(-s);
 
     // x' = x*c + z*s
-    float32x4_t v_x = vaddq_f32(vmulq_f32(v_px, v_c), vmulq_f32(v_pz, v_s));
+    float32x4_t v_x = vfmaq_f32(vmulq_f32(v_pz, v_s), v_px, v_c);
     // z' = -x*s + z*c
-    float32x4_t v_z = vaddq_f32(vmulq_f32(v_px, v_ns), vmulq_f32(v_pz, v_c));
+    float32x4_t v_z = vfmaq_f32(vmulq_f32(v_pz, v_c), v_px, v_ns);
 
     // Build result [x', y, z', 0]
     float32x4_t vres = vdupq_n_f32(0.0f);
@@ -2559,48 +2567,48 @@ void WMATH_ROTATE_Y(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
 
     // --- RISC-V Vector implementation ---
-    size_t vl = vsetvlmax_e32m1();
-    vfloat32m1_t va = wcn_load_vec3_partial_riscv(a.v, vl);  // [px, py, pz, 0]
-    vfloat32m1_t vb = wcn_load_vec3_partial_riscv(b.v, vl);
-    vfloat32m1_t vp = vfsub_vv_f32m1(va, vb, vl);
+    size_t vl = __riscv_vsetvlmax_e32m1();
+    vfloat32m1_t va = wcn_load_vec3_partial(a.v);  // [px, py, pz, 0]
+    vfloat32m1_t vb = wcn_load_vec3_partial(b.v);
+    vfloat32m1_t vp = __riscv_vfsub_vv_f32m1(va, vb, vl);
 
     // Extract values and use them in computation
-    float px = vfmv_f_s_f32m1_e32m1(vp, 0);
-    float py = vfmv_f_s_f32m1_e32m1(vp, 1);
-    float pz = vfmv_f_s_f32m1_e32m1(vp, 2);
+    float px = wcn_rvv_lane(vp, 0, vl);
+    float py = wcn_rvv_lane(vp, 1, vl);
+    float pz = wcn_rvv_lane(vp, 2, vl);
 
     // Compute results
     float x_new = c * px + s * pz;
     float z_new = -s * px + c * pz;
 
-    vfloat32m1_t vres = vfmv_v_f_f32m1(0.0f, vl);
-    vres = vfmv_s_f32m1_e32m1(vres, x_new, 0, vl);
-    vres = vfmv_s_f32m1_e32m1(vres, py, 1, vl);
-    vres = vfmv_s_f32m1_e32m1(vres, z_new, 2, vl);
+    vfloat32m1_t vres = __riscv_vfmv_v_f_f32m1(0.0f, vl);
+    vres = wcn_rvv_set_lane(vres, x_new, 0, vl);
+    vres = wcn_rvv_set_lane(vres, py, 1, vl);
+    vres = wcn_rvv_set_lane(vres, z_new, 2, vl);
 
     // add center and store
-    vres = vfadd_vv_f32m1(vres, vb, vl);
-    wcn_store_vec3_partial_riscv(dst->v, vres, vl);
+    vres = __riscv_vfadd_vv_f32m1(vres, vb, vl);
+    wcn_store_vec3_partial(dst->v, vres);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
 
     // --- LoongArch LSX implementation ---
-    __m128 va = wcn_load_vec3_partial_loongarch(a.v);  // [px, py, pz, 0]
-    __m128 vb = wcn_load_vec3_partial_loongarch(b.v);
+    __m128 va = wcn_load_vec3_partial(a.v);  // [px, py, pz, 0]
+    __m128 vb = wcn_load_vec3_partial(b.v);
     __m128 vp = __lsx_vfsub_s(va, vb);
 
     // Extract lanes and broadcast
-    float px = __lsx_vpickve2gr_w_s(vp, 0);
-    float py = __lsx_vpickve2gr_w_s(vp, 1);
-    float pz = __lsx_vpickve2gr_w_s(vp, 2);
+    float px = wcn_lsx_extract_f(vp, 0);
+    float py = wcn_lsx_extract_f(vp, 1);
+    float pz = wcn_lsx_extract_f(vp, 2);
 
-    __m128 v_px = __lsx_vreplfr2vr_s(px);
-    __m128 v_py = __lsx_vreplfr2vr_s(py);
-    __m128 v_pz = __lsx_vreplfr2vr_s(pz);
+    __m128 v_px = wcn_lsx_splat_f(px);
+    __m128 v_py = wcn_lsx_splat_f(py);
+    __m128 v_pz = wcn_lsx_splat_f(pz);
 
-    __m128 v_c = __lsx_vreplfr2vr_s(c);
-    __m128 v_s = __lsx_vreplfr2vr_s(s);
-    __m128 v_ns = __lsx_vreplfr2vr_s(-s);
+    __m128 v_c = wcn_lsx_splat_f(c);
+    __m128 v_s = wcn_lsx_splat_f(s);
+    __m128 v_ns = wcn_lsx_splat_f(-s);
 
     // x' = x*c + z*s
     __m128 v_x =
@@ -2611,8 +2619,8 @@ void WMATH_ROTATE_Y(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
         __lsx_vfadd_s(__lsx_vfmul_s(v_px, v_ns), __lsx_vfmul_s(v_pz, v_c));  // [z',z',z',z']
 
     // Build [x', y, z', 0]
-    float x_s = __lsx_vpickve2gr_w_s(v_x, 0);
-    float z_s = __lsx_vpickve2gr_w_s(v_z, 0);
+    float x_s = wcn_lsx_extract_f(v_x, 0);
+    float z_s = wcn_lsx_extract_f(v_z, 0);
 
     __m128 vres = __lsx_vinsgr2vr_w(
         __lsx_vinsgr2vr_w(__lsx_vinsgr2vr_w(__lsx_vldrepl_w(&(float){0.0f}, 0), x_s, 0), py, 1),
@@ -2620,7 +2628,7 @@ void WMATH_ROTATE_Y(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
 
     // add center and store
     vres = __lsx_vfadd_s(vres, vb);
-    wcn_store_vec3_partial_loongarch(dst->v, vres);
+    wcn_store_vec3_partial(dst->v, vres);
 
 #else
 
@@ -2663,10 +2671,10 @@ void WMATH_ROTATE_Z(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
     __m128 v_zero = _mm_setzero_ps();
 
     // x' = x*c - y*s
-    __m128 v_x = _mm_sub_ps(_mm_mul_ps(v_px, v_c), _mm_mul_ps(v_py, v_s));
+    __m128 v_x = wcn_fma_mul_sub_ps(v_px, v_c, _mm_mul_ps(v_py, v_s));
 
     // y' = x*s + y*c
-    __m128 v_y = _mm_add_ps(_mm_mul_ps(v_px, v_s), _mm_mul_ps(v_py, v_c));
+    __m128 v_y = wcn_fma_mul_add_ps(v_px, v_s, _mm_mul_ps(v_py, v_c));
 
     // z' = z (unchanged by Z-rotation)
     __m128 v_z = v_pz;
@@ -2703,9 +2711,9 @@ void WMATH_ROTATE_Z(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
     float32x4_t v_s = vdupq_n_f32(s);
 
     // x' = x*c - y*s
-    float32x4_t v_x = vsubq_f32(vmulq_f32(v_px, v_c), vmulq_f32(v_py, v_s));
+    float32x4_t v_x = vfmsq_f32(v_px, v_c, vmulq_f32(v_py, v_s));
     // y' = x*s + y*c
-    float32x4_t v_y = vaddq_f32(vmulq_f32(v_px, v_s), vmulq_f32(v_py, v_c));
+    float32x4_t v_y = vfmaq_f32(vmulq_f32(v_py, v_c), v_px, v_s);
     // z' = z
     float32x4_t v_z = v_pz;
 
@@ -2763,47 +2771,47 @@ void WMATH_ROTATE_Z(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
 
     // --- RISC-V Vector implementation ---
-    size_t vl = vsetvlmax_e32m1();
-    vfloat32m1_t va = wcn_load_vec3_partial_riscv(a.v, vl);  // [px, py, pz, 0]
-    vfloat32m1_t vb = wcn_load_vec3_partial_riscv(b.v, vl);
-    vfloat32m1_t vp = vfsub_vv_f32m1(va, vb, vl);
+    size_t vl = __riscv_vsetvlmax_e32m1();
+    vfloat32m1_t va = wcn_load_vec3_partial(a.v);  // [px, py, pz, 0]
+    vfloat32m1_t vb = wcn_load_vec3_partial(b.v);
+    vfloat32m1_t vp = __riscv_vfsub_vv_f32m1(va, vb, vl);
 
     // Extract values and use them in computation
-    float px = vfmv_f_s_f32m1_e32m1(vp, 0);
-    float py = vfmv_f_s_f32m1_e32m1(vp, 1);
-    float pz = vfmv_f_s_f32m1_e32m1(vp, 2);
+    float px = wcn_rvv_lane(vp, 0, vl);
+    float py = wcn_rvv_lane(vp, 1, vl);
+    float pz = wcn_rvv_lane(vp, 2, vl);
 
     // Compute results
     float x_new = c * px - s * py;
     float y_new = s * px + c * py;
 
-    vfloat32m1_t vres = vfmv_v_f_f32m1(0.0f, vl);
-    vres = vfmv_s_f32m1_e32m1(vres, x_new, 0, vl);
-    vres = vfmv_s_f32m1_e32m1(vres, y_new, 1, vl);
-    vres = vfmv_s_f32m1_e32m1(vres, pz, 2, vl);
+    vfloat32m1_t vres = __riscv_vfmv_v_f_f32m1(0.0f, vl);
+    vres = wcn_rvv_set_lane(vres, x_new, 0, vl);
+    vres = wcn_rvv_set_lane(vres, y_new, 1, vl);
+    vres = wcn_rvv_set_lane(vres, pz, 2, vl);
 
     // add center and store
-    vres = vfadd_vv_f32m1(vres, vb, vl);
-    wcn_store_vec3_partial_riscv(dst->v, vres, vl);
+    vres = __riscv_vfadd_vv_f32m1(vres, vb, vl);
+    wcn_store_vec3_partial(dst->v, vres);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
 
     // --- LoongArch LSX implementation ---
-    __m128 va = wcn_load_vec3_partial_loongarch(a.v);  // [px, py, pz, 0]
-    __m128 vb = wcn_load_vec3_partial_loongarch(b.v);
+    __m128 va = wcn_load_vec3_partial(a.v);  // [px, py, pz, 0]
+    __m128 vb = wcn_load_vec3_partial(b.v);
     __m128 vp = __lsx_vfsub_s(va, vb);
 
     // Extract lanes and broadcast
-    float px = __lsx_vpickve2gr_w_s(vp, 0);
-    float py = __lsx_vpickve2gr_w_s(vp, 1);
-    float pz = __lsx_vpickve2gr_w_s(vp, 2);
+    float px = wcn_lsx_extract_f(vp, 0);
+    float py = wcn_lsx_extract_f(vp, 1);
+    float pz = wcn_lsx_extract_f(vp, 2);
 
-    __m128 v_px = __lsx_vreplfr2vr_s(px);
-    __m128 v_py = __lsx_vreplfr2vr_s(py);
-    __m128 v_pz = __lsx_vreplfr2vr_s(pz);
+    __m128 v_px = wcn_lsx_splat_f(px);
+    __m128 v_py = wcn_lsx_splat_f(py);
+    __m128 v_pz = wcn_lsx_splat_f(pz);
 
-    __m128 v_c = __lsx_vreplfr2vr_s(c);
-    __m128 v_s = __lsx_vreplfr2vr_s(s);
+    __m128 v_c = wcn_lsx_splat_f(c);
+    __m128 v_s = wcn_lsx_splat_f(s);
 
     // x' = x*c - y*s
     __m128 v_x =
@@ -2817,8 +2825,8 @@ void WMATH_ROTATE_Z(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
     __m128 v_z = v_pz;
 
     // Build [x', y', z', 0]
-    float x_s = __lsx_vpickve2gr_w_s(v_x, 0);
-    float y_s = __lsx_vpickve2gr_w_s(v_y, 0);
+    float x_s = wcn_lsx_extract_f(v_x, 0);
+    float y_s = wcn_lsx_extract_f(v_y, 0);
 
     __m128 vres = __lsx_vinsgr2vr_w(
         __lsx_vinsgr2vr_w(__lsx_vinsgr2vr_w(__lsx_vldrepl_w(&(float){0.0f}, 0), x_s, 0), y_s, 1),
@@ -2826,7 +2834,7 @@ void WMATH_ROTATE_Z(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b, floa
 
     // add center and store
     vres = __lsx_vfadd_s(vres, vb);
-    wcn_store_vec3_partial_loongarch(dst->v, vres);
+    wcn_store_vec3_partial(dst->v, vres);
 
 #else
 
@@ -2871,9 +2879,9 @@ void WMATH_CALL(Vec4, transform_mat4)(DST_VEC4, WMATH_TYPE(Vec4) v, WMATH_TYPE(M
     res = _mm_fmadd_ps(col3, v_w, res);
 #else
     __m128 res = _mm_mul_ps(col0, v_x);
-    res = _mm_add_ps(res, _mm_mul_ps(col1, v_y));
-    res = _mm_add_ps(res, _mm_mul_ps(col2, v_z));
-    res = _mm_add_ps(res, _mm_mul_ps(col3, v_w));
+    res = wcn_fma_mul_add_ps(col1, v_y, res);
+    res = wcn_fma_mul_add_ps(col2, v_z, res);
+    res = wcn_fma_mul_add_ps(col3, v_w, res);
 #endif
 
     _mm_storeu_ps(dst->v, res);
@@ -2935,16 +2943,16 @@ void WMATH_CALL(Vec4, transform_mat4)(DST_VEC4, WMATH_TYPE(Vec4) v, WMATH_TYPE(M
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // ================= RISC-V Vector 实现 =================
-    size_t vl = __riscv_vsetvli(4, __RISCV_VTYPE_F32, __RISCV_VLMUL_1);
+    size_t vl = __riscv_vsetvl_e32m1(4);
 
     // 加载向量
     vfloat32m1_t vec_v = __riscv_vle32_v_f32m1(v.v, vl);
 
     // 按行加载矩阵
-    vfloat32m1_t row0 = __riscv_vcreate_v_f32m1x4(m.m[0], m.m[4], m.m[8], m.m[12]);
-    vfloat32m1_t row1 = __riscv_vcreate_v_f32m1x4(m.m[1], m.m[5], m.m[9], m.m[13]);
-    vfloat32m1_t row2 = __riscv_vcreate_v_f32m1x4(m.m[2], m.m[6], m.m[10], m.m[14]);
-    vfloat32m1_t row3 = __riscv_vcreate_v_f32m1x4(m.m[3], m.m[7], m.m[11], m.m[15]);
+    vfloat32m1_t row0 = wcn_rvv_make4_f(m.m[0], m.m[4], m.m[8], m.m[12]);
+    vfloat32m1_t row1 = wcn_rvv_make4_f(m.m[1], m.m[5], m.m[9], m.m[13]);
+    vfloat32m1_t row2 = wcn_rvv_make4_f(m.m[2], m.m[6], m.m[10], m.m[14]);
+    vfloat32m1_t row3 = wcn_rvv_make4_f(m.m[3], m.m[7], m.m[11], m.m[15]);
 
     // 点积
     vfloat32m1_t mul0 = __riscv_vfmul_vv_f32m1(row0, vec_v, vl);
@@ -2953,14 +2961,10 @@ void WMATH_CALL(Vec4, transform_mat4)(DST_VEC4, WMATH_TYPE(Vec4) v, WMATH_TYPE(M
     vfloat32m1_t mul3 = __riscv_vfmul_vv_f32m1(row3, vec_v, vl);
 
     // 横向加法
-    float x = __riscv_vfmv_f_s_f32m1(
-        __riscv_vfredusum_vs_f32m1_f32m1(mul0, __riscv_vfmv_v_f_f32m1(0.0f, 1), vl), vl);
-    float y = __riscv_vfmv_f_s_f32m1(
-        __riscv_vfredusum_vs_f32m1_f32m1(mul1, __riscv_vfmv_v_f_f32m1(0.0f, 1), vl), vl);
-    float z = __riscv_vfmv_f_s_f32m1(
-        __riscv_vfredusum_vs_f32m1_f32m1(mul2, __riscv_vfmv_v_f_f32m1(0.0f, 1), vl), vl);
-    float w = __riscv_vfmv_f_s_f32m1(
-        __riscv_vfredusum_vs_f32m1_f32m1(mul3, __riscv_vfmv_v_f_f32m1(0.0f, 1), vl), vl);
+    float x = wcn_rvv_lane(__riscv_vfredusum_vs_f32m1_f32m1(mul0, __riscv_vfmv_v_f_f32m1(0.0f, 1), vl), vl, vl);
+    float y = wcn_rvv_lane(__riscv_vfredusum_vs_f32m1_f32m1(mul1, __riscv_vfmv_v_f_f32m1(0.0f, 1), vl), vl, vl);
+    float z = wcn_rvv_lane(__riscv_vfredusum_vs_f32m1_f32m1(mul2, __riscv_vfmv_v_f_f32m1(0.0f, 1), vl), vl, vl);
+    float w = wcn_rvv_lane(__riscv_vfredusum_vs_f32m1_f32m1(mul3, __riscv_vfmv_v_f_f32m1(0.0f, 1), vl), vl, vl);
 
     dst->v[0] = x;
     dst->v[1] = y;
@@ -3030,39 +3034,18 @@ void WMATH_CALL(Vec4, transform_mat4)(DST_VEC4, WMATH_TYPE(Vec4) v, WMATH_TYPE(M
 // Quat rotate_x
 void WMATH_ROTATE_X(Quat)(DST_QUAT, WMATH_TYPE(Quat) q, float angleInRadians) {
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-    // SSE implementation
-    float half_angle = angleInRadians * 0.5f;
-    float s = sinf(half_angle);
-    float c = cosf(half_angle);
+    // SSE implementation.
+    //   result = [ q.x*c + q.w*s,  q.y*c + q.z*s,  q.z*c - q.y*s,  q.w*c - q.x*s ]
+    // which is c*q + s*(q reversed) with signs [+ + - -]. The previous version
+    // shuffled the result one extra time and stored [w, z, y, x].
+    const float half_angle = angleInRadians * 0.5f;
+    const float s = sinf(half_angle);
+    const float c = cosf(half_angle);
 
-    // Load quaternion
-    __m128 q_vec = _mm_loadu_ps(q.v);
-
-    // Create rotation quaternion b = [s, 0, 0, c]
-    __m128 b_vec = _mm_set_ps(c, 0.0f, 0.0f, s);
-
-    // Shuffle q for multiplication:
-    // q = [x, y, z, w]
-    // For result.x: q.x * b.w + q.w * b.x = q[0] * b[3] + q[3] * b[0]
-    // For result.y: q.y * b.w + q.z * b.x = q[1] * b[3] + q[2] * b[0]
-    // For result.z: q.z * b.w - q.y * b.x = q[2] * b[3] - q[1] * b[0]
-    // For result.w: q.w * b.w - q.x * b.x = q[3] * b[3] - q[0] * b[0]
-
-    const __m128 q_swapped = _mm_shuffle_ps(q_vec, q_vec, _MM_SHUFFLE(0, 3, 2, 1));  // [y, z, w, x]
-    const __m128 b_swapped = _mm_shuffle_ps(b_vec, b_vec, _MM_SHUFFLE(0, 0, 0, 3));  // [c, 0, 0, c]
-
-    __m128 mul1 = _mm_mul_ps(q_vec, b_swapped);
-    const __m128 mul2 = _mm_mul_ps(
-        q_swapped, _mm_shuffle_ps(b_vec, b_vec, _MM_SHUFFLE(3, 0, 0, 0)));  // [s, 0, 0, s]
-
-    // Add/sub according to formula
-    const __m128 signs = _mm_set_ps(-1.0f, -1.0f, 1.0f, 1.0f);
-    const __m128 mul2_signed = _mm_mul_ps(mul2, signs);
-    __m128 res_vec = _mm_add_ps(mul1, mul2_signed);
-
-    // Correct order: [x, y, z, w]
-    res_vec =
-        _mm_shuffle_ps(res_vec, res_vec, _MM_SHUFFLE(2, 1, 0, 3));  // [w, z, y, x] -> [x, y, z, w]
+    const __m128 q_vec = _mm_loadu_ps(q.v);
+    const __m128 q_rev = _mm_shuffle_ps(q_vec, q_vec, _MM_SHUFFLE(0, 1, 2, 3));  // [w, z, y, x]
+    const __m128 signs = _mm_set_ps(-1.0f, -1.0f, 1.0f, 1.0f);                   // [+, +, -, -]
+    const __m128 res_vec = wcn_fma_mul_add_ps(_mm_mul_ps(q_rev, _mm_set1_ps(s)), signs, _mm_mul_ps(q_vec, _mm_set1_ps(c)));
     _mm_storeu_ps(dst->v, res_vec);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
@@ -3146,19 +3129,19 @@ void WMATH_ROTATE_X(Quat)(DST_QUAT, WMATH_TYPE(Quat) q, float angleInRadians) {
     float s = sinf(half_angle);
     float c = cosf(half_angle);
 
-    size_t vl = __riscv_vsetvli(4, __RISCV_VTYPE_F32, __RISCV_VLMUL_1);
+    size_t vl = __riscv_vsetvl_e32m1(4);
 
     // Load quaternion
     vfloat32m1_t q_vec = __riscv_vle32_v_f32m1(q.v, vl);
 
     // Create rotation quaternion b = [s, 0, 0, c]
-    vfloat32m1_t b_vec = __riscv_vcreate_v_f32m1x4(s, 0.0f, 0.0f, c);
+    vfloat32m1_t b_vec = wcn_rvv_make4_f(s, 0.0f, 0.0f, c);
 
     // Perform quaternion multiplication manually
-    float q_x = __riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(q_vec, 0), vl);
-    float q_y = __riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(q_vec, 1), vl);
-    float q_z = __riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(q_vec, 2), vl);
-    float q_w = __riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(q_vec, 3), vl);
+    float q_x = wcn_rvv_lane(q_vec, 0, vl);
+    float q_y = wcn_rvv_lane(q_vec, 1, vl);
+    float q_z = wcn_rvv_lane(q_vec, 2, vl);
+    float q_w = wcn_rvv_lane(q_vec, 3, vl);
 
     dst->v[0] = q_x * c + q_w * s;
     dst->v[1] = q_y * c + q_z * s;
@@ -3217,28 +3200,15 @@ void WMATH_ROTATE_Y(Quat)(DST_QUAT, WMATH_TYPE(Quat) q, float angleInRadians) {
     // Load quaternion
     __m128 q_vec = _mm_loadu_ps(q.v);
 
-    // Create rotation quaternion b = [0, s, 0, c]
-    _mm_set_ps(c, 0.0f, s, 0.0f);
-
-    // For rotation around y-axis:
-    // result.x = q.x * b.w - q.z * b.y = q[0] * b[3] - q[2] * b[1]
-    // result.y = q.y * b.w + q.w * b.y = q[1] * b[3] + q[3] * b[1]
-    // result.z = q.z * b.w + q.x * b.y = q[2] * b[3] + q[0] * b[1]
-    // result.w = q.w * b.w - q.y * b.y = q[3] * b[3] - q[1] * b[1]
-
-    const __m128 mul1 = _mm_mul_ps(q_vec, _mm_set_ps(c, c, c, c));
-    const __m128 q_shuffled =
-        _mm_shuffle_ps(q_vec, q_vec, _MM_SHUFFLE(1, 0, 3, 2));  // [z, w, x, y]
-    const __m128 mul2 = _mm_mul_ps(q_shuffled, _mm_set_ps(s, s, s, s));
-
-    // Apply signs based on formula
-    const __m128 signs = _mm_set_ps(-1.0f, 1.0f, 1.0f, -1.0f);
-    __m128 mul2_signed = _mm_mul_ps(mul2, signs);
-    __m128 res_vec =
-        _mm_add_ps(mul1, _mm_shuffle_ps(mul2_signed, mul2_signed, _MM_SHUFFLE(2, 3, 0, 1)));
-
-    // Reorder to get [x, y, z, w]
-    res_vec = _mm_shuffle_ps(res_vec, res_vec, _MM_SHUFFLE(2, 3, 1, 0));
+    // For rotation around y-axis (b = [0, s, 0, c]):
+    //   result = [ q.x*c - q.z*s,  q.y*c + q.w*s,  q.z*c + q.x*s,  q.w*c - q.y*s ]
+    // = c*q + s*signs*[q_z, q_w, q_x, q_y] with signs [-, +, +, -]. The
+    // previous version multiplied the whole vector by the constant c (instead
+    // of broadcasting per-lane) and then applied two shuffles that could not
+    // produce this pairing.
+    const __m128 q_shuffled = _mm_shuffle_ps(q_vec, q_vec, _MM_SHUFFLE(1, 0, 3, 2));  // [z, w, x, y]
+    const __m128 signs = _mm_set_ps(-1.0f, 1.0f, 1.0f, -1.0f);                        // [-, +, +, -]
+    const __m128 res_vec = wcn_fma_mul_add_ps(_mm_mul_ps(q_shuffled, _mm_set1_ps(s)), signs, _mm_mul_ps(q_vec, _mm_set1_ps(c)));
     _mm_storeu_ps(dst->v, res_vec);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
@@ -3376,27 +3346,14 @@ void WMATH_ROTATE_Z(Quat)(DST_QUAT, WMATH_TYPE(Quat) q, float angleInRadians) {
     // Load quaternion
     __m128 q_vec = _mm_loadu_ps(q.v);
 
-    // Create rotation quaternion b = [0, 0, s, c]
-    _mm_set_ps(c, s, 0.0f, 0.0f);
-
-    // For rotation around z-axis:
-    // result.x = q.x * b.w + q.y * b.z = q[0] * b[3] + q[1] * b[2]
-    // result.y = q.y * b.w - q.x * b.z = q[1] * b[3] - q[0] * b[2]
-    // result.z = q.z * b.w + q.w * b.z = q[2] * b[3] + q[3] * b[2]
-    // result.w = q.w * b.w - q.z * b.z = q[3] * b[3] - q[2] * b[2]
-
-    __m128 mul1 = _mm_mul_ps(q_vec, _mm_set_ps(c, c, c, c));
-    __m128 q_shuffled = _mm_shuffle_ps(q_vec, q_vec, _MM_SHUFFLE(2, 3, 0, 1));  // [y, x, w, z]
-    __m128 mul2 = _mm_mul_ps(q_shuffled, _mm_set_ps(s, s, s, s));
-
-    // Apply signs based on formula
-    __m128 signs = _mm_set_ps(-1.0f, 1.0f, -1.0f, 1.0f);
-    __m128 mul2_signed = _mm_mul_ps(mul2, signs);
-    __m128 res_vec =
-        _mm_add_ps(mul1, _mm_shuffle_ps(mul2_signed, mul2_signed, _MM_SHUFFLE(3, 2, 1, 0)));
-
-    // Reorder to get [x, y, z, w]
-    res_vec = _mm_shuffle_ps(res_vec, res_vec, _MM_SHUFFLE(3, 2, 0, 1));
+    // For rotation around z-axis (b = [0, 0, s, c]):
+    //   result = [ q.x*c + q.y*s,  q.y*c - q.x*s,  q.z*c + q.w*s,  q.w*c - q.z*s ]
+    // = c*q + s*signs*[q_y, q_x, q_w, q_z] with signs [+,-,+,-]. Same
+    // per-lane-constant bug as rotate_x/rotate_y: the old code multiplied the
+    // whole vector by c and then shuffled lanes into wrong positions.
+    const __m128 q_shuffled = _mm_shuffle_ps(q_vec, q_vec, _MM_SHUFFLE(2, 3, 0, 1));  // [y, x, w, z]
+    const __m128 signs = _mm_set_ps(-1.0f, 1.0f, -1.0f, 1.0f);                        // [+, -, +, -]
+    const __m128 res_vec = wcn_fma_mul_add_ps(_mm_mul_ps(q_shuffled, _mm_set1_ps(s)), signs, _mm_mul_ps(q_vec, _mm_set1_ps(c)));
     _mm_storeu_ps(dst->v, res_vec);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
@@ -3535,20 +3492,20 @@ void WMATH_ROTATE(Mat3)(DST_MAT3, WMATH_TYPE(Mat3) m, float angleInRadians) {
     __m128 s_vec = _mm_set1_ps(s);
 
     // Calculate new first row: c * row0 + s * row1
-    __m128 new_row0 = _mm_add_ps(_mm_mul_ps(c_vec, row0), _mm_mul_ps(s_vec, row1));
+    __m128 new_row0 = wcn_fma_mul_add_ps(c_vec, row0, _mm_mul_ps(s_vec, row1));
 
     // Calculate new second row: c * row1 - s * row0
-    __m128 new_row1 = _mm_sub_ps(_mm_mul_ps(c_vec, row1), _mm_mul_ps(s_vec, row0));
+    __m128 new_row1 = wcn_fma_mul_sub_ps(c_vec, row1, _mm_mul_ps(s_vec, row0));
 
     // Store results
     wcn_mat3_set_row(dst, 0, new_row0);
     wcn_mat3_set_row(dst, 1, new_row1);
 
-    // Copy third row if needed
-    if (!_mm_movemask_ps(_mm_cmpeq_ps(new_row0, row0)) ||
-        !_mm_movemask_ps(_mm_cmpeq_ps(new_row1, row1))) {
-        wcn_mat3_set_row(dst, 2, wcn_mat3_get_row(&m, 2));
-    }
+    // Copy third row. `m` is passed by value, so its row 2 is the original
+    // whether or not dst aliases it -- an unconditional copy is correct for
+    // every aliasing pattern. The old movemask guard skipped this copy on the
+    // failing test inputs, leaving dst row 2 uninitialised (MSVC C4700).
+    wcn_mat3_set_row(dst, 2, wcn_mat3_get_row(&m, 2));
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
     // NEON implementation
@@ -3564,22 +3521,17 @@ void WMATH_ROTATE(Mat3)(DST_MAT3, WMATH_TYPE(Mat3) m, float angleInRadians) {
     float32x4_t s_vec = vdupq_n_f32(s);
 
     // Calculate new first row: c * row0 + s * row1
-    float32x4_t new_row0 = vaddq_f32(vmulq_f32(c_vec, row0), vmulq_f32(s_vec, row1));
+    float32x4_t new_row0 = vfmaq_f32(vmulq_f32(s_vec, row1), c_vec, row0);
 
     // Calculate new second row: c * row1 - s * row0
-    float32x4_t new_row1 = vsubq_f32(vmulq_f32(c_vec, row1), vmulq_f32(s_vec, row0));
+    float32x4_t new_row1 = vfmsq_f32(c_vec, row1, vmulq_f32(s_vec, row0));
 
     // Store results
     wcn_mat3_set_row(dst, 0, new_row0);
     wcn_mat3_set_row(dst, 1, new_row1);
 
-    // Simple check for equality (simplified version of the original logic)
-    uint32x4_t eq0 = vceqq_f32(new_row0, row0);
-    uint32x4_t eq1 = vceqq_f32(new_row1, row1);
-    if (!(vgetq_lane_u32(eq0, 0) && vgetq_lane_u32(eq0, 1) && vgetq_lane_u32(eq0, 2) &&
-          vgetq_lane_u32(eq1, 0) && vgetq_lane_u32(eq1, 1) && vgetq_lane_u32(eq1, 2))) {
-        wcn_mat3_set_row(dst, 2, wcn_mat3_get_row(&m, 2));
-    }
+    // Copy row 2 unconditionally (see the SSE note above).
+    wcn_mat3_set_row(dst, 2, wcn_mat3_get_row(&m, 2));
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
     // WASM SIMD implementation
@@ -3678,8 +3630,10 @@ void WMATH_ROTATE(Mat3)(DST_MAT3, WMATH_TYPE(Mat3) m, float angleInRadians) {
     dst->m[5] = c * m11 - s * m01;
     dst->m[6] = c * m12 - s * m02;
 
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[8] = m.m[8];
         dst->m[9] = m.m[9];
         dst->m[10] = m.m[10];
@@ -3703,20 +3657,17 @@ void WMATH_ROTATE_X(Mat3)(DST_MAT3, WMATH_TYPE(Mat3) m, float angleInRadians) {
     __m128 s_vec = _mm_set1_ps(s);
 
     // Calculate new second row: c * row1 + s * row2
-    __m128 new_row1 = _mm_add_ps(_mm_mul_ps(c_vec, row1), _mm_mul_ps(s_vec, row2));
+    __m128 new_row1 = wcn_fma_mul_add_ps(c_vec, row1, _mm_mul_ps(s_vec, row2));
 
     // Calculate new third row: c * row2 - s * row1
-    __m128 new_row2 = _mm_sub_ps(_mm_mul_ps(c_vec, row2), _mm_mul_ps(s_vec, row1));
+    __m128 new_row2 = wcn_fma_mul_sub_ps(c_vec, row2, _mm_mul_ps(s_vec, row1));
 
     // Store results
     wcn_mat3_set_row(dst, 1, new_row1);
     wcn_mat3_set_row(dst, 2, new_row2);
 
-    // Copy first row if needed
-    if (!_mm_movemask_ps(_mm_cmpeq_ps(new_row1, row1)) ||
-        !_mm_movemask_ps(_mm_cmpeq_ps(new_row2, row2))) {
-        wcn_mat3_set_row(dst, 0, wcn_mat3_get_row(&m, 0));
-    }
+    // Copy first row unconditionally (m is by value; see WMATH_ROTATE(Mat3)).
+    wcn_mat3_set_row(dst, 0, wcn_mat3_get_row(&m, 0));
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
     // NEON implementation
@@ -3732,22 +3683,17 @@ void WMATH_ROTATE_X(Mat3)(DST_MAT3, WMATH_TYPE(Mat3) m, float angleInRadians) {
     float32x4_t s_vec = vdupq_n_f32(s);
 
     // Calculate new second row: c * row1 + s * row2
-    float32x4_t new_row1 = vaddq_f32(vmulq_f32(c_vec, row1), vmulq_f32(s_vec, row2));
+    float32x4_t new_row1 = vfmaq_f32(vmulq_f32(s_vec, row2), c_vec, row1);
 
     // Calculate new third row: c * row2 - s * row1
-    float32x4_t new_row2 = vsubq_f32(vmulq_f32(c_vec, row2), vmulq_f32(s_vec, row1));
+    float32x4_t new_row2 = vfmsq_f32(c_vec, row2, vmulq_f32(s_vec, row1));
 
     // Store results
     wcn_mat3_set_row(dst, 1, new_row1);
     wcn_mat3_set_row(dst, 2, new_row2);
 
-    // Simple check for equality (simplified version of the original logic)
-    uint32x4_t eq1 = vceqq_f32(new_row1, row1);
-    uint32x4_t eq2 = vceqq_f32(new_row2, row2);
-    if (!(vgetq_lane_u32(eq1, 0) && vgetq_lane_u32(eq1, 1) && vgetq_lane_u32(eq1, 2) &&
-          vgetq_lane_u32(eq2, 0) && vgetq_lane_u32(eq2, 1) && vgetq_lane_u32(eq2, 2))) {
-        wcn_mat3_set_row(dst, 0, wcn_mat3_get_row(&m, 0));
-    }
+    // Copy row 0 unconditionally (m is by value; see WMATH_ROTATE(Mat3)).
+    wcn_mat3_set_row(dst, 0, wcn_mat3_get_row(&m, 0));
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
     // WASM SIMD implementation
@@ -3841,8 +3787,10 @@ void WMATH_ROTATE_X(Mat3)(DST_MAT3, WMATH_TYPE(Mat3) m, float angleInRadians) {
     dst->m[8] = c * m_20 - s * m_10;
     dst->m[9] = c * m_21 - s * m_11;
     dst->m[10] = c * m_22 - s * m_12;
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[0] = m.m[0];
         dst->m[1] = m.m[1];
         dst->m[2] = m.m[2];
@@ -3866,20 +3814,17 @@ void WMATH_ROTATE_Y(Mat3)(DST_MAT3, WMATH_TYPE(Mat3) m, float angleInRadians) {
     __m128 s_vec = _mm_set1_ps(s);
 
     // Calculate new first row: c * row0 - s * row2
-    __m128 new_row0 = _mm_sub_ps(_mm_mul_ps(c_vec, row0), _mm_mul_ps(s_vec, row2));
+    __m128 new_row0 = wcn_fma_mul_sub_ps(c_vec, row0, _mm_mul_ps(s_vec, row2));
 
     // Calculate new third row: c * row2 + s * row0
-    __m128 new_row2 = _mm_add_ps(_mm_mul_ps(c_vec, row2), _mm_mul_ps(s_vec, row0));
+    __m128 new_row2 = wcn_fma_mul_add_ps(c_vec, row2, _mm_mul_ps(s_vec, row0));
 
     // Store results
     wcn_mat3_set_row(dst, 0, new_row0);
     wcn_mat3_set_row(dst, 2, new_row2);
 
-    // Copy second row if needed
-    if (!_mm_movemask_ps(_mm_cmpeq_ps(new_row0, row0)) ||
-        !_mm_movemask_ps(_mm_cmpeq_ps(new_row2, row2))) {
-        wcn_mat3_set_row(dst, 1, wcn_mat3_get_row(&m, 1));
-    }
+    // Copy row 1 unconditionally (m is by value; see WMATH_ROTATE(Mat3)).
+    wcn_mat3_set_row(dst, 1, wcn_mat3_get_row(&m, 1));
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
     // NEON implementation
@@ -3895,22 +3840,17 @@ void WMATH_ROTATE_Y(Mat3)(DST_MAT3, WMATH_TYPE(Mat3) m, float angleInRadians) {
     float32x4_t s_vec = vdupq_n_f32(s);
 
     // Calculate new first row: c * row0 - s * row2
-    float32x4_t new_row0 = vsubq_f32(vmulq_f32(c_vec, row0), vmulq_f32(s_vec, row2));
+    float32x4_t new_row0 = vfmsq_f32(c_vec, row0, vmulq_f32(s_vec, row2));
 
     // Calculate new third row: c * row2 + s * row0
-    float32x4_t new_row2 = vaddq_f32(vmulq_f32(c_vec, row2), vmulq_f32(s_vec, row0));
+    float32x4_t new_row2 = vfmaq_f32(vmulq_f32(s_vec, row0), c_vec, row2);
 
     // Store results
     wcn_mat3_set_row(dst, 0, new_row0);
     wcn_mat3_set_row(dst, 2, new_row2);
 
-    // Simple check for equality (simplified version of the original logic)
-    uint32x4_t eq0 = vceqq_f32(new_row0, row0);
-    uint32x4_t eq2 = vceqq_f32(new_row2, row2);
-    if (!(vgetq_lane_u32(eq0, 0) && vgetq_lane_u32(eq0, 1) && vgetq_lane_u32(eq0, 2) &&
-          vgetq_lane_u32(eq2, 0) && vgetq_lane_u32(eq2, 1) && vgetq_lane_u32(eq2, 2))) {
-        wcn_mat3_set_row(dst, 1, wcn_mat3_get_row(&m, 1));
-    }
+    // Copy row 1 unconditionally (m is by value; see WMATH_ROTATE(Mat3)).
+    wcn_mat3_set_row(dst, 1, wcn_mat3_get_row(&m, 1));
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
     // WASM SIMD implementation
@@ -4006,8 +3946,10 @@ void WMATH_ROTATE_Y(Mat3)(DST_MAT3, WMATH_TYPE(Mat3) m, float angleInRadians) {
     dst->m[9] = c * m21 + s * m01;
     dst->m[10] = c * m22 + s * m02;
 
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[4] = m.m[4];
         dst->m[5] = m.m[5];
         dst->m[6] = m.m[6];
@@ -4113,6 +4055,10 @@ void WMATH_CALL(Mat3, get_scaling)(DST_VEC2, const WMATH_TYPE(Mat3) m) {
 
 // Mat3 get_3D_scaling
 void WMATH_CALL(Mat3, get_3D_scaling)(DST_VEC3, const WMATH_TYPE(Mat3) m) {
+    /* Scalar on every backend, structurally: three independent sqrt reductions,
+     * one per output component. A vector form would need the three diagonals
+     * gathered and a 3-lane sqrt, which costs more than three scalar sqrtss
+     * (compare Vec3_length, scalar for the same reason). */
     const float xx = m.m[0];
     const float xy = m.m[1];
     const float xz = m.m[2];
@@ -4143,16 +4089,18 @@ void WMATH_GET_TRANSLATION(Mat3)(DST_VEC2, WMATH_TYPE(Mat3) m) {
  * @returns The matrix with translation set.
  */
 void WMATH_SET_TRANSLATION(Mat3)(DST_MAT3, const WMATH_TYPE(Mat3) m, const WMATH_TYPE(Vec2) v) {
-    WMATH_TYPE(Mat3) identity;
-    WMATH_IDENTITY(Mat3)(&identity);
-    if (!WMATH_EQUALS(Mat3)(m, identity)) {
-        dst->m[0] = m.m[0];
-        dst->m[1] = m.m[1];
-        dst->m[2] = m.m[2];
-        dst->m[4] = m.m[4];
-        dst->m[5] = m.m[5];
-        dst->m[6] = m.m[6];
-    }
+    // The original guards with `if (a !== newDst)` -- a REFERENCE comparison to
+    // allow in-place use. In this API m is passed by value, so the guard is
+    // always true and the copy must be unconditional. The port turned it into a
+    // VALUE comparison (m equals identity), which skipped the copy exactly when
+    // the input was an identity matrix and left rows 0-1 uninitialised
+    // (LOGIC_BUGS.md L-12).
+    dst->m[0] = m.m[0];
+    dst->m[1] = m.m[1];
+    dst->m[2] = m.m[2];
+    dst->m[4] = m.m[4];
+    dst->m[5] = m.m[5];
+    dst->m[6] = m.m[6];
     dst->m[8] = v.v[0];
     dst->m[9] = v.v[1];
     dst->m[10] = 1;
@@ -4161,25 +4109,16 @@ void WMATH_SET_TRANSLATION(Mat3)(DST_MAT3, const WMATH_TYPE(Mat3) m, const WMATH
 // Mat3 translation
 void WMATH_TRANSLATION(Mat3)(DST_MAT3, WMATH_TYPE(Vec2) v) {
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-    // SSE implementation - create 2D translation matrix efficiently
-    __m128 vec_v = wcn_load_vec2_partial(v.v);
-    __m128 vec_zero = _mm_setzero_ps();
-    __m128 vec_one = _mm_set1_ps(1.0f);
-
-    // Create identity matrix with translation in third row
-    // Row0: [1, 0, 0, pad]
-    __m128 row0 = _mm_move_ss(vec_one, vec_zero);
-    row0 = _mm_shuffle_ps(row0, vec_zero, _MM_SHUFFLE(0, 0, 2, 0));
-
-    // Row1: [0, 1, 0, pad]
-    __m128 row1 = _mm_move_ss(vec_zero, vec_one);
-    row1 = _mm_shuffle_ps(row1, vec_zero, _MM_SHUFFLE(0, 2, 0, 1));
-
-    // Row2: [v.x, v.y, 1, pad]
-    __m128 row2 = _mm_move_ss(vec_v, vec_one);
-    row2 = _mm_shuffle_ps(row2, vec_zero, _MM_SHUFFLE(0, 2, 1, 0));
-
-    // Store results
+    // SSE implementation. The result is a constant matrix plus (v.x, v.y);
+    // building it with _mm_setr_ps gives the compiler literal movaps stores,
+    // which is both smaller and correct. The previous _mm_move_ss/shuffle
+    // sequence mis-arranged rows 0 and 1 (the shuffles reordered lanes
+    // differently than intended and the padding slots kept garbage), which is
+    // why the SIMD build produced an identity matrix with the diagonal in the
+    // wrong slots.
+    const __m128 row0 = _mm_setr_ps(1.0f, 0.0f, 0.0f, 0.0f);
+    const __m128 row1 = _mm_setr_ps(0.0f, 1.0f, 0.0f, 0.0f);
+    const __m128 row2 = _mm_setr_ps(v.v[0], v.v[1], 1.0f, 0.0f);
     _mm_storeu_ps(&dst->m[0], row0);
     _mm_storeu_ps(&dst->m[4], row1);
     _mm_storeu_ps(&dst->m[8], row2);
@@ -4240,7 +4179,7 @@ void WMATH_TRANSLATION(Mat3)(DST_MAT3, WMATH_TYPE(Vec2) v) {
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // RISC-V Vector implementation - create 2D translation matrix efficiently
-    size_t vl = __riscv_vsetvli(4, __RISCV_VTYPE_F32, __RISCV_VLMUL_1);
+    size_t vl = __riscv_vsetvl_e32m1(4);
 
     vfloat32m1_t vec_v = __riscv_vle32_v_f32m1(v.v, vl);
     vfloat32m1_t vec_zero = __riscv_vfmv_v_f_f32m1(0.0f, vl);
@@ -4248,16 +4187,13 @@ void WMATH_TRANSLATION(Mat3)(DST_MAT3, WMATH_TYPE(Vec2) v) {
 
     // Create identity matrix with translation in third row
     // Row0: [1, 0, 0, 0]
-    vfloat32m1_t row0 =
-        __riscv_vslideup_vx_f32m1(__riscv_vslideup_vx_f32m1(vec_zero, 1.0f, 0, vl), 0.0f, 1, vl);
+    vfloat32m1_t row0 = wcn_rvv_make4_f(1.0f, 0.0f, 0.0f, 0.0f);
 
     // Row1: [0, 1, 0, 0]
-    vfloat32m1_t row1 =
-        __riscv_vslideup_vx_f32m1(__riscv_vslideup_vx_f32m1(vec_zero, 0.0f, 0, vl), 1.0f, 1, vl);
+    vfloat32m1_t row1 = wcn_rvv_make4_f(0.0f, 1.0f, 0.0f, 0.0f);
 
     // Row2: [v.x, v.y, 1, 0]
-    vfloat32m1_t row2 =
-        __riscv_vslideup_vx_f32m1(__riscv_vslideup_vx_f32m1(vec_v, 1.0f, 2, vl), 0.0f, 3, vl);
+    vfloat32m1_t row2 = wcn_rvv_make4_f(v.v[0], v.v[1], 1.0f, 0.0f);
 
     // Store results
     __riscv_vse32_v_f32m1(&dst->m[0], row0, vl);
@@ -4267,25 +4203,25 @@ void WMATH_TRANSLATION(Mat3)(DST_MAT3, WMATH_TYPE(Vec2) v) {
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - create 2D translation matrix efficiently
     __m128 vec_v = __lsx_vld(v.v, 0);
-    __m128 vec_zero = __lsx_vffint_s_w(__lsx_vldreplgr2vr_w(0));
-    __m128 vec_one = __lsx_vldrepl_w(&WMATH_ONE, 0);
+    __m128 vec_zero = __lsx_vffint_s_w(__lsx_vreplgr2vr_w(0));
+    __m128 vec_one = wcn_lsx_splat_f(1.0f);
 
     // Create identity matrix with translation in third row
     // Row0: [1, 0, 0, 0]
     __m128 row0 = __lsx_vinsgr2vr_w(
-        __lsx_vinsgr2vr_w(__lsx_vinsgr2vr_w(__lsx_vldrepl_w(&WMATH_ZERO, 0), 1.0f, 0), 0.0f, 1),
+        __lsx_vinsgr2vr_w(__lsx_vinsgr2vr_w(wcn_lsx_splat_f(0.0f), 1.0f, 0), 0.0f, 1),
         0.0f, 2);
     row0 = __lsx_vinsgr2vr_w(row0, 0.0f, 3);
 
     // Row1: [0, 1, 0, 0]
     __m128 row1 = __lsx_vinsgr2vr_w(
-        __lsx_vinsgr2vr_w(__lsx_vinsgr2vr_w(__lsx_vldrepl_w(&WMATH_ZERO, 0), 0.0f, 0), 1.0f, 1),
+        __lsx_vinsgr2vr_w(__lsx_vinsgr2vr_w(wcn_lsx_splat_f(0.0f), 0.0f, 0), 1.0f, 1),
         0.0f, 2);
     row1 = __lsx_vinsgr2vr_w(row1, 0.0f, 3);
 
     // Row2: [v.x, v.y, 1, 0]
     __m128 row2 = __lsx_vinsgr2vr_w(
-        __lsx_vinsgr2vr_w(__lsx_vinsgr2vr_w(__lsx_vldrepl_w(&WMATH_ZERO, 0), v.v[0], 0), v.v[1], 1),
+        __lsx_vinsgr2vr_w(__lsx_vinsgr2vr_w(wcn_lsx_splat_f(0.0f), v.v[0], 0), v.v[1], 1),
         1.0f, 2);
     row2 = __lsx_vinsgr2vr_w(row2, 0.0f, 3);
 
@@ -4321,8 +4257,10 @@ void WMATH_CALL(Mat3, translate)(DST_MAT3, WMATH_TYPE(Mat3) m, WMATH_TYPE(Vec2) 
     __m128 row2 = wcn_mat3_get_row(&m, 2);
 
     // Copy the first two rows unchanged if matrices are different
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat3_set_row(dst, 0, row0);
         wcn_mat3_set_row(dst, 1, row1);
     }
@@ -4351,8 +4289,10 @@ void WMATH_CALL(Mat3, translate)(DST_MAT3, WMATH_TYPE(Mat3) m, WMATH_TYPE(Vec2) 
     float32x4_t row2 = wcn_mat3_get_row(&m, 2);
 
     // Copy the first two rows unchanged if matrices are different
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat3_set_row(dst, 0, row0);
         wcn_mat3_set_row(dst, 1, row1);
     }
@@ -4381,8 +4321,10 @@ void WMATH_CALL(Mat3, translate)(DST_MAT3, WMATH_TYPE(Mat3) m, WMATH_TYPE(Vec2) 
     v128_t row2 = wcn_mat3_get_row(&m, 2);
 
     // Copy the first two rows unchanged if matrices are different
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat3_set_row(dst, 0, row0);
         wcn_mat3_set_row(dst, 1, row1);
     }
@@ -4405,15 +4347,17 @@ void WMATH_CALL(Mat3, translate)(DST_MAT3, WMATH_TYPE(Mat3) m, WMATH_TYPE(Vec2) 
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // RISC-V Vector implementation - optimized 2D matrix translation
-    size_t vl = __riscv_vsetvli(4, __RISCV_VTYPE_F32, __RISCV_VLMUL_1);
+    size_t vl = __riscv_vsetvl_e32m1(4);
     vfloat32m1_t vec_v = __riscv_vle32_v_f32m1(v.v, vl);
     vfloat32m1_t row0 = wcn_mat3_get_row(&m, 0);
     vfloat32m1_t row1 = wcn_mat3_get_row(&m, 1);
     vfloat32m1_t row2 = wcn_mat3_get_row(&m, 2);
 
     // Copy the first two rows unchanged if matrices are different
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat3_set_row(dst, 0, row0);
         wcn_mat3_set_row(dst, 1, row1);
     }
@@ -4421,9 +4365,9 @@ void WMATH_CALL(Mat3, translate)(DST_MAT3, WMATH_TYPE(Mat3) m, WMATH_TYPE(Vec2) 
     // Calculate translation components using SIMD
     // Extract x, y components from translation vector
     vfloat32m1_t v_x =
-        __riscv_vfmv_v_f_f32m1(__riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(vec_v, 0), vl), vl);
+        __riscv_vfmv_v_f_f32m1(wcn_rvv_lane(vec_v, 0, vl), vl);
     vfloat32m1_t v_y =
-        __riscv_vfmv_v_f_f32m1(__riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(vec_v, 1), vl), vl);
+        __riscv_vfmv_v_f_f32m1(wcn_rvv_lane(vec_v, 1, vl), vl);
 
     // Calculate dot products for each translation component
     vfloat32m1_t dot_x = __riscv_vfmul_vv_f32m1(row0, v_x, vl);
@@ -4444,8 +4388,10 @@ void WMATH_CALL(Mat3, translate)(DST_MAT3, WMATH_TYPE(Mat3) m, WMATH_TYPE(Vec2) 
     __m128 row2 = wcn_mat3_get_row(&m, 2);
 
     // Copy the first two rows unchanged if matrices are different
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat3_set_row(dst, 0, row0);
         wcn_mat3_set_row(dst, 1, row1);
     }
@@ -4472,8 +4418,10 @@ void WMATH_CALL(Mat3, translate)(DST_MAT3, WMATH_TYPE(Mat3) m, WMATH_TYPE(Vec2) 
     float v1 = v.v[1];
 
     // Copy rotation/scaling part if matrices are different
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[0] = m.m[0];
         dst->m[1] = m.m[1];
         dst->m[2] = m.m[2];
@@ -4555,18 +4503,18 @@ void WMATH_CALL(Mat4, axis_rotate)(DST_MAT4, WMATH_TYPE(Mat4) m, WMATH_TYPE(Vec3
     // Row 0 calculation
     // newRow0 = r00*row0 + r01*row1 + r02*row2
     __m128 nr0 = _mm_mul_ps(_mm_set1_ps(r00), row0);
-    nr0 = _mm_add_ps(nr0, _mm_mul_ps(_mm_set1_ps(r01), row1));
-    nr0 = _mm_add_ps(nr0, _mm_mul_ps(_mm_set1_ps(r02), row2));
+    nr0 = wcn_fma_mul_add_ps(_mm_set1_ps(r01), row1, nr0);
+    nr0 = wcn_fma_mul_add_ps(_mm_set1_ps(r02), row2, nr0);
 
     // Row 1 calculation
     __m128 nr1 = _mm_mul_ps(_mm_set1_ps(r10), row0);
-    nr1 = _mm_add_ps(nr1, _mm_mul_ps(_mm_set1_ps(r11), row1));
-    nr1 = _mm_add_ps(nr1, _mm_mul_ps(_mm_set1_ps(r12), row2));
+    nr1 = wcn_fma_mul_add_ps(_mm_set1_ps(r11), row1, nr1);
+    nr1 = wcn_fma_mul_add_ps(_mm_set1_ps(r12), row2, nr1);
 
     // Row 2 calculation
     __m128 nr2 = _mm_mul_ps(_mm_set1_ps(r20), row0);
-    nr2 = _mm_add_ps(nr2, _mm_mul_ps(_mm_set1_ps(r21), row1));
-    nr2 = _mm_add_ps(nr2, _mm_mul_ps(_mm_set1_ps(r22), row2));
+    nr2 = wcn_fma_mul_add_ps(_mm_set1_ps(r21), row1, nr2);
+    nr2 = wcn_fma_mul_add_ps(_mm_set1_ps(r22), row2, nr2);
 
     // Store results
     wcn_mat4_set_row(dst, 0, nr0);
@@ -4637,10 +4585,10 @@ void WMATH_CALL(Mat4, axis_rotate)(DST_MAT4, WMATH_TYPE(Mat4) m, WMATH_TYPE(Vec3
     // RISC-V Vector Implementation
     size_t vl = 4;  // Assuming operation on 4 floats
 
-    vfloat32m1_t row0 = wcn_mat4_get_row_riscv(&m, 0, vl);
-    vfloat32m1_t row1 = wcn_mat4_get_row_riscv(&m, 1, vl);
-    vfloat32m1_t row2 = wcn_mat4_get_row_riscv(&m, 2, vl);
-    vfloat32m1_t row3 = wcn_mat4_get_row_riscv(&m, 3, vl);
+    vfloat32m1_t row0 = wcn_mat4_get_row(&m, 0);
+    vfloat32m1_t row1 = wcn_mat4_get_row(&m, 1);
+    vfloat32m1_t row2 = wcn_mat4_get_row(&m, 2);
+    vfloat32m1_t row3 = wcn_mat4_get_row(&m, 3);
 
     // Row 0
     // nr0 = row0 * r00
@@ -4660,50 +4608,50 @@ void WMATH_CALL(Mat4, axis_rotate)(DST_MAT4, WMATH_TYPE(Mat4) m, WMATH_TYPE(Vec3
     nr2 = __riscv_vfmacc_vf_f32m1(nr2, r21, row1, vl);
     nr2 = __riscv_vfmacc_vf_f32m1(nr2, r22, row2, vl);
 
-    wcn_mat4_set_row_riscv(dst, 0, nr0, vl);
-    wcn_mat4_set_row_riscv(dst, 1, nr1, vl);
-    wcn_mat4_set_row_riscv(dst, 2, nr2, vl);
-    wcn_mat4_set_row_riscv(dst, 3, row3, vl);
+    wcn_mat4_set_row(dst, 0, nr0);
+    wcn_mat4_set_row(dst, 1, nr1);
+    wcn_mat4_set_row(dst, 2, nr2);
+    wcn_mat4_set_row(dst, 3, row3);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX Implementation
 
-    __m128 row0 = wcn_mat4_get_row_loongarch(&m, 0);
-    __m128 row1 = wcn_mat4_get_row_loongarch(&m, 1);
-    __m128 row2 = wcn_mat4_get_row_loongarch(&m, 2);
-    __m128 row3 = wcn_mat4_get_row_loongarch(&m, 3);
+    __m128 row0 = wcn_mat4_get_row(&m, 0);
+    __m128 row1 = wcn_mat4_get_row(&m, 1);
+    __m128 row2 = wcn_mat4_get_row(&m, 2);
+    __m128 row3 = wcn_mat4_get_row(&m, 3);
 
     // Row 0
-    __m128 v_r00 = __lsx_vreplfr2vr_s(r00);
-    __m128 v_r01 = __lsx_vreplfr2vr_s(r01);
-    __m128 v_r02 = __lsx_vreplfr2vr_s(r02);
+    __m128 v_r00 = wcn_lsx_splat_f(r00);
+    __m128 v_r01 = wcn_lsx_splat_f(r01);
+    __m128 v_r02 = wcn_lsx_splat_f(r02);
 
     __m128 nr0 = __lsx_vfmul_s(row0, v_r00);
     nr0 = __lsx_vfmadd_s(row1, v_r01, nr0);  // d = a*b + c
     nr0 = __lsx_vfmadd_s(row2, v_r02, nr0);
 
     // Row 1
-    __m128 v_r10 = __lsx_vreplfr2vr_s(r10);
-    __m128 v_r11 = __lsx_vreplfr2vr_s(r11);
-    __m128 v_r12 = __lsx_vreplfr2vr_s(r12);
+    __m128 v_r10 = wcn_lsx_splat_f(r10);
+    __m128 v_r11 = wcn_lsx_splat_f(r11);
+    __m128 v_r12 = wcn_lsx_splat_f(r12);
 
     __m128 nr1 = __lsx_vfmul_s(row0, v_r10);
     nr1 = __lsx_vfmadd_s(row1, v_r11, nr1);
     nr1 = __lsx_vfmadd_s(row2, v_r12, nr1);
 
     // Row 2
-    __m128 v_r20 = __lsx_vreplfr2vr_s(r20);
-    __m128 v_r21 = __lsx_vreplfr2vr_s(r21);
-    __m128 v_r22 = __lsx_vreplfr2vr_s(r22);
+    __m128 v_r20 = wcn_lsx_splat_f(r20);
+    __m128 v_r21 = wcn_lsx_splat_f(r21);
+    __m128 v_r22 = wcn_lsx_splat_f(r22);
 
     __m128 nr2 = __lsx_vfmul_s(row0, v_r20);
     nr2 = __lsx_vfmadd_s(row1, v_r21, nr2);
     nr2 = __lsx_vfmadd_s(row2, v_r22, nr2);
 
-    wcn_mat4_set_row_loongarch(dst, 0, nr0);
-    wcn_mat4_set_row_loongarch(dst, 1, nr1);
-    wcn_mat4_set_row_loongarch(dst, 2, nr2);
-    wcn_mat4_set_row_loongarch(dst, 3, row3);
+    wcn_mat4_set_row(dst, 0, nr0);
+    wcn_mat4_set_row(dst, 1, nr1);
+    wcn_mat4_set_row(dst, 2, nr2);
+    wcn_mat4_set_row(dst, 3, row3);
 
 #else
     // Scalar Fallback
@@ -4758,6 +4706,9 @@ void WMATH_CALL(Mat4, axis_rotate)(DST_MAT4, WMATH_TYPE(Mat4) m, WMATH_TYPE(Vec3
  *     around the axis.
  */
 void WMATH_CALL(Mat4, axis_rotation)(DST_MAT4, WMATH_TYPE(Vec3) axis, float angleInRadians) {
+    /* Scalar on every backend, structurally: cosf and sinf are scalar library
+     * calls, and the nine multiplies around them are not worth packing on their
+     * own -- the transcendentals dominate. */
     WMATH_ZERO(Mat4)(dst);
 
     float x = axis.v[0];
@@ -4812,27 +4763,59 @@ void WMATH_CALL(Mat4, camera_aim)(DST_MAT4,
                                   WMATH_TYPE(Vec3) target,  // target: Vec3
                                   WMATH_TYPE(Vec3) up       // up: Vec3
 ) {
-    WMATH_ZERO(Mat4)(dst);
+    /* Same scalar-frame basis construction as Mat4_aim/look_at: the SUB/
+     * NORMALIZE/CROSS chain copies a 12-byte Vec3 by value six times, which
+     * measured 41.6ns against 8.4ns for the equivalent scalar form (PS-04).
+     *
+     * As with aim() the axes are ROW-wise (x at m[0..2], y at m[4..6], z at
+     * m[8..10]) and the translation goes in m[12..14]; the only difference from
+     * aim() is the sign of z (here eye - target). m[3]/m[7]/m[11] stay zero,
+     * which the previous WMATH_ZERO(Mat4) covered. */
+    float zx = eye.v[0] - target.v[0];
+    float zy = eye.v[1] - target.v[1];
+    float zz = eye.v[2] - target.v[2];
+    const float z_len_sq = zx * zx + zy * zy + zz * zz;
+    const float eps_sq = wcn_math_get_epsilon() * wcn_math_get_epsilon();
+    if (z_len_sq > eps_sq) {
+        const float inv = 1.0f / sqrtf(z_len_sq);
+        zx *= inv;
+        zy *= inv;
+        zz *= inv;
+    } else {
+        zx = zy = zz = 0.0f;
+    }
 
-    WMATH_TYPE(Vec3) z_axis, x_axis, y_axis, temp;
-    WMATH_SUB(Vec3)(&temp, eye, target);
-    WMATH_NORMALIZE(Vec3)(&z_axis, temp);
-    WMATH_CROSS(Vec3)(&temp, up, z_axis);
-    WMATH_NORMALIZE(Vec3)(&x_axis, temp);
-    WMATH_CROSS(Vec3)(&y_axis, z_axis, x_axis);
+    /* x = up x z */
+    float xx = up.v[1] * zz - up.v[2] * zy;
+    float xy = up.v[2] * zx - up.v[0] * zz;
+    float xz = up.v[0] * zy - up.v[1] * zx;
+    const float x_len_sq = xx * xx + xy * xy + xz * xz;
+    if (x_len_sq > eps_sq) {
+        const float inv = 1.0f / sqrtf(x_len_sq);
+        xx *= inv;
+        xy *= inv;
+        xz *= inv;
+    } else {
+        xx = xy = xz = 0.0f;
+    }
 
-    dst->m[0] = x_axis.v[0];
-    dst->m[1] = x_axis.v[1];
-    dst->m[2] = x_axis.v[2];  // x
-    // dst->m[3] = 0;
-    dst->m[4] = y_axis.v[0];
-    dst->m[5] = y_axis.v[1];
-    dst->m[6] = y_axis.v[2];  // y
-    // dst->m[7] = 0;
-    dst->m[8] = z_axis.v[0];
-    dst->m[9] = z_axis.v[1];
-    dst->m[10] = z_axis.v[2];  // z
-    // dst->m[11] = 0;
+    /* y = z x x - perpendicular unit vectors, so already unit length. */
+    const float yx = zy * xz - zz * xy;
+    const float yy = zz * xx - zx * xz;
+    const float yz = zx * xy - zy * xx;
+
+    dst->m[0] = xx;
+    dst->m[1] = xy;
+    dst->m[2] = xz;  // x
+    dst->m[3] = 0.0f;
+    dst->m[4] = yx;
+    dst->m[5] = yy;
+    dst->m[6] = yz;  // y
+    dst->m[7] = 0.0f;
+    dst->m[8] = zx;
+    dst->m[9] = zy;
+    dst->m[10] = zz;  // z
+    dst->m[11] = 0.0f;
     dst->m[12] = eye.v[0];
     dst->m[13] = eye.v[1];
     dst->m[14] = eye.v[2];
@@ -4924,7 +4907,7 @@ void WMATH_CALL(Mat4, frustum)(DST_MAT4, const float left, const float right, co
     // RISC-V Vector Implementation
     float data[16] = {m00, 0.0f, 0.0f, 0.0f,  0.0f, m11,  0.0f, 0.0f,
                       m20, m21,  m22,  -1.0f, 0.0f, 0.0f, m32,  0.0f};
-    size_t vl = __riscv_vsetvli(16, __RISCV_VTYPE_F32, __RISCV_VLMUL_1);
+    size_t vl = __riscv_vsetvl_e32m1(16);
     vfloat32m1_t vec = __riscv_vle32_v_f32m1(data, vl);
     __riscv_vse32_v_f32m1(dst->m, vec, vl);
 
@@ -5048,7 +5031,7 @@ void WMATH_CALL(Mat4, frustum_reverse_z)(DST_MAT4, const float left, const float
     // RISC-V Vector Implementation
     float data[16] = {m00, 0.0f, 0.0f, 0.0f,  0.0f, m11,  0.0f, 0.0f,
                       m20, m21,  m22,  -1.0f, 0.0f, 0.0f, m32,  0.0f};
-    size_t vl = __riscv_vsetvli(16, __RISCV_VTYPE_F32, __RISCV_VLMUL_1);
+    size_t vl = __riscv_vsetvl_e32m1(16);
     vfloat32m1_t vec = __riscv_vle32_v_f32m1(data, vl);
     __riscv_vse32_v_f32m1(dst->m, vec, vl);
 
@@ -5123,22 +5106,21 @@ void WMATH_GET_TRANSLATION(Mat4)(DST_VEC3, const WMATH_TYPE(Mat4) m) {
 
 // Mat4 setTranslation
 void WMATH_SET_TRANSLATION(Mat4)(DST_MAT4, WMATH_TYPE(Mat4) m, WMATH_TYPE(Vec3) v) {
-    WMATH_TYPE(Mat4) identity;
-    WMATH_IDENTITY(Mat4)(&identity);
-    if (!WMATH_EQUALS(Mat4)(m, identity)) {
-        dst->m[0] = m.m[0];
-        dst->m[1] = m.m[1];
-        dst->m[2] = m.m[2];
-        dst->m[3] = m.m[3];
-        dst->m[4] = m.m[4];
-        dst->m[5] = m.m[5];
-        dst->m[6] = m.m[6];
-        dst->m[7] = m.m[7];
-        dst->m[8] = m.m[8];
-        dst->m[9] = m.m[9];
-        dst->m[10] = m.m[10];
-        dst->m[11] = m.m[11];
-    }
+    // Unconditional copy: the original's `a !== newDst` reference guard is
+    // always true for by-value m (see WMATH_SET_TRANSLATION(Mat3) above;
+    // LOGIC_BUGS.md L-12).
+    dst->m[0] = m.m[0];
+    dst->m[1] = m.m[1];
+    dst->m[2] = m.m[2];
+    dst->m[3] = m.m[3];
+    dst->m[4] = m.m[4];
+    dst->m[5] = m.m[5];
+    dst->m[6] = m.m[6];
+    dst->m[7] = m.m[7];
+    dst->m[8] = m.m[8];
+    dst->m[9] = m.m[9];
+    dst->m[10] = m.m[10];
+    dst->m[11] = m.m[11];
     dst->m[12] = v.v[0];
     dst->m[13] = v.v[1];
     dst->m[14] = v.v[2];
@@ -5216,7 +5198,7 @@ void WMATH_TRANSLATION(Mat4)(DST_MAT4, WMATH_TYPE(Vec3) v) {
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // ========================= RISC-V Vector implementation =========================
-    size_t vl = vsetvlmax_e32m1();
+    size_t vl = __riscv_vsetvlmax_e32m1();
 
     // Use scalar approach for translation matrix construction
     memset(dst, 0, sizeof(WMATH_TYPE(Mat4)));
@@ -5366,7 +5348,7 @@ void WMATH_CALL(Mat4, perspective)(DST_MAT4, float fieldOfViewYInRadians, float 
     float data[16] = {m00,  0.0f, 0.0f, 0.0f,  0.0f, m11,  0.0f, 0.0f,
                       0.0f, 0.0f, m22,  -1.0f, 0.0f, 0.0f, m32,  0.0f};
 
-    size_t vl = __riscv_vsetvli(16, __RISCV_VTYPE_F32, __RISCV_VLMUL_1);
+    size_t vl = __riscv_vsetvl_e32m1(16);
     vfloat32m1_t vec_all = __riscv_vle32_v_f32m1(data, vl);
     __riscv_vse32_v_f32m1(dst->m, vec_all, vl);
 
@@ -5418,7 +5400,11 @@ void WMATH_CALL(Mat4, perspective_reverse_z)(
     dst->m[5] = f;
     // 11
     dst->m[11] = -1;
-    if (isfinite(_zFar)) {
+    // The two branches were swapped: the finite case ran when zFar was infinite
+  // (making rangeInv 1/inf = 0, so the far plane collapsed to zNear) and the
+  // infinite case ran when zFar was finite. The original is
+  // `if (zFar === Infinity) { m[10]=0; m[14]=zNear; } else { ...finite... }`.
+  if (!isfinite(_zFar)) {
         dst->m[10] = 0;
         dst->m[14] = zNear;
     } else {
@@ -5447,8 +5433,10 @@ void WMATH_CALL(Mat4, translate)(DST_MAT4, WMATH_TYPE(Mat4) m, WMATH_TYPE(Vec3) 
     __m128 row3 = wcn_mat4_get_row(&m, 3);
 
     // Copy the first three rows unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 0, row0);
         wcn_mat4_set_row(dst, 1, row1);
         wcn_mat4_set_row(dst, 2, row2);
@@ -5482,8 +5470,10 @@ void WMATH_CALL(Mat4, translate)(DST_MAT4, WMATH_TYPE(Mat4) m, WMATH_TYPE(Vec3) 
     float32x4_t row3 = wcn_mat4_get_row(&m, 3);
 
     // Copy the first three rows unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 0, row0);
         wcn_mat4_set_row(dst, 1, row1);
         wcn_mat4_set_row(dst, 2, row2);
@@ -5517,8 +5507,10 @@ void WMATH_CALL(Mat4, translate)(DST_MAT4, WMATH_TYPE(Mat4) m, WMATH_TYPE(Vec3) 
     v128_t row3 = wcn_mat4_get_row(&m, 3);
 
     // Copy the first three rows unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 0, row0);
         wcn_mat4_set_row(dst, 1, row1);
         wcn_mat4_set_row(dst, 2, row2);
@@ -5545,81 +5537,83 @@ void WMATH_CALL(Mat4, translate)(DST_MAT4, WMATH_TYPE(Mat4) m, WMATH_TYPE(Vec3) 
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // RISC-V Vector implementation - optimized matrix translation
-    size_t vl = vsetvlmax_e32m1();
+    size_t vl = __riscv_vsetvlmax_e32m1();
 
     vfloat32m1_t vec_v = wcn_load_vec3_partial(v.v);
-    vfloat32m1_t row0 = wcn_mat4_get_row_riscv(&m, 0, vl);
-    vfloat32m1_t row1 = wcn_mat4_get_row_riscv(&m, 1, vl);
-    vfloat32m1_t row2 = wcn_mat4_get_row_riscv(&m, 2, vl);
-    vfloat32m1_t row3 = wcn_mat4_get_row_riscv(&m, 3, vl);
+    vfloat32m1_t row0 = wcn_mat4_get_row(&m, 0);
+    vfloat32m1_t row1 = wcn_mat4_get_row(&m, 1);
+    vfloat32m1_t row2 = wcn_mat4_get_row(&m, 2);
+    vfloat32m1_t row3 = wcn_mat4_get_row(&m, 3);
 
     // Copy the first three rows unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
-        wcn_mat4_set_row_riscv(dst, 0, row0, vl);
-        wcn_mat4_set_row_riscv(dst, 1, row1, vl);
-        wcn_mat4_set_row_riscv(dst, 2, row2, vl);
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
+        wcn_mat4_set_row(dst, 0, row0);
+        wcn_mat4_set_row(dst, 1, row1);
+        wcn_mat4_set_row(dst, 2, row2);
     }
 
     // Extract x, y, z components from translation vector
-    float x = vfmv_f_s_f32m1_f32m1(vec_v);
-    float y = vfmv_f_s_f32m1_f32m1(vslide1down_vx_f32m1(vec_v, 0, vl));
-    float z = vfmv_f_s_f32m1_f32m1(vslide1down_vx_f32m1(vslide1down_vx_f32m1(vec_v, 0, vl), 0, vl));
+    /* lanes 0, 1 and 2 of the translation vector; one helper call each */
+    float x = wcn_rvv_lane(vec_v, 0, vl);
+    float y = wcn_rvv_lane(vec_v, 1, vl);
+    float z = wcn_rvv_lane(vec_v, 2, vl);
 
-    vfloat32m1_t v_x = vfmv_v_f_f32m1(x, vl);
-    vfloat32m1_t v_y = vfmv_v_f_f32m1(y, vl);
-    vfloat32m1_t v_z = vfmv_v_f_f32m1(z, vl);
+    vfloat32m1_t v_x = __riscv_vfmv_v_f_f32m1(x, vl);
+    vfloat32m1_t v_y = __riscv_vfmv_v_f_f32m1(y, vl);
+    vfloat32m1_t v_z = __riscv_vfmv_v_f_f32m1(z, vl);
 
     // Calculate dot products for each translation component
-    vfloat32m1_t dot_x = vfmul_vv_f32m1(row0, v_x, vl);
-    vfloat32m1_t dot_y = vfmul_vv_f32m1(row1, v_y, vl);
-    vfloat32m1_t dot_z = vfmul_vv_f32m1(row2, v_z, vl);
+    vfloat32m1_t dot_x = __riscv_vfmul_vv_f32m1(row0, v_x, vl);
+    vfloat32m1_t dot_y = __riscv_vfmul_vv_f32m1(row1, v_y, vl);
+    vfloat32m1_t dot_z = __riscv_vfmul_vv_f32m1(row2, v_z, vl);
 
     // Sum the dot products and add original translation
-    vfloat32m1_t sum_xy = vfadd_vv_f32m1(dot_x, dot_y, vl);
-    vfloat32m1_t sum_xyz = vfadd_vv_f32m1(sum_xy, dot_z, vl);
-    vfloat32m1_t trans_sum = vfadd_vv_f32m1(sum_xyz, row3, vl);
+    vfloat32m1_t sum_xy = __riscv_vfadd_vv_f32m1(dot_x, dot_y, vl);
+    vfloat32m1_t sum_xyz = __riscv_vfadd_vv_f32m1(sum_xy, dot_z, vl);
+    vfloat32m1_t trans_sum = __riscv_vfadd_vv_f32m1(sum_xyz, row3, vl);
 
     // Store the translation row
-    wcn_mat4_set_row_riscv(dst, 3, trans_sum, vl);
+    wcn_mat4_set_row(dst, 3, trans_sum);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - optimized matrix translation
     __m128 vec_v = wcn_load_vec3_partial(v.v);
-    __m128 row0 = wcn_mat4_get_row_loongarch(&m, 0);
-    __m128 row1 = wcn_mat4_get_row_loongarch(&m, 1);
-    __m128 row2 = wcn_mat4_get_row_loongarch(&m, 2);
-    __m128 row3 = wcn_mat4_get_row_loongarch(&m, 3);
+    __m128 row0 = wcn_mat4_get_row(&m, 0);
+    __m128 row1 = wcn_mat4_get_row(&m, 1);
+    __m128 row2 = wcn_mat4_get_row(&m, 2);
+    __m128 row3 = wcn_mat4_get_row(&m, 3);
 
     // Copy the first three rows unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
-        wcn_mat4_set_row_loongarch(dst, 0, row0);
-        wcn_mat4_set_row_loongarch(dst, 1, row1);
-        wcn_mat4_set_row_loongarch(dst, 2, row2);
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
+        wcn_mat4_set_row(dst, 0, row0);
+        wcn_mat4_set_row(dst, 1, row1);
+        wcn_mat4_set_row(dst, 2, row2);
     }
 
     // Calculate translation components using SIMD
     // Extract x, y, z components from translation vector
-    __m128 v_x = __lsx_vpickve2gr_w(vec_v, 0);
-    v_x = __lsx_vreplvei_w(v_x, 0);
-    __m128 v_y = __lsx_vpickve2gr_w(vec_v, 1);
-    v_y = __lsx_vreplvei_w(v_y, 0);
-    __m128 v_z = __lsx_vpickve2gr_w(vec_v, 2);
-    v_z = __lsx_vreplvei_w(v_z, 0);
+    __m128 v_x = wcn_lsx_splat_f(wcn_lsx_extract_f(vec_v, 0));
+    __m128 v_y = wcn_lsx_splat_f(wcn_lsx_extract_f(vec_v, 1));
+    __m128 v_z = wcn_lsx_splat_f(wcn_lsx_extract_f(vec_v, 2));
 
     // Calculate dot products for each translation component
-    __m128 dot_x = __lsx_fmul_s(row0, v_x);
-    __m128 dot_y = __lsx_fmul_s(row1, v_y);
-    __m128 dot_z = __lsx_fmul_s(row2, v_z);
+    __m128 dot_x = __lsx_vfmul_s(row0, v_x);
+    __m128 dot_y = __lsx_vfmul_s(row1, v_y);
+    __m128 dot_z = __lsx_vfmul_s(row2, v_z);
 
     // Sum the dot products and add original translation
-    __m128 sum_xy = __lsx_fadd_s(dot_x, dot_y);
-    __m128 sum_xyz = __lsx_fadd_s(sum_xy, dot_z);
-    __m128 trans_sum = __lsx_fadd_s(sum_xyz, row3);
+    __m128 sum_xy = __lsx_vfadd_s(dot_x, dot_y);
+    __m128 sum_xyz = __lsx_vfadd_s(sum_xy, dot_z);
+    __m128 trans_sum = __lsx_vfadd_s(sum_xyz, row3);
 
     // Store the translation row
-    wcn_mat4_set_row_loongarch(dst, 3, trans_sum);
+    wcn_mat4_set_row(dst, 3, trans_sum);
 
 #else
     // Scalar fallback with optimized variable usage
@@ -5628,8 +5622,10 @@ void WMATH_CALL(Mat4, translate)(DST_MAT4, WMATH_TYPE(Mat4) m, WMATH_TYPE(Vec3) 
     float v2 = v.v[2];
 
     // Copy rotation/scaling part if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[0] = m.m[0];
         dst->m[1] = m.m[1];
         dst->m[2] = m.m[2];
@@ -5706,8 +5702,8 @@ void WMATH_ROTATE_X(Mat4)(
     __m128 new_row1 = _mm_fmadd_ps(vec_c, row1, _mm_mul_ps(vec_s, row2));
     __m128 new_row2 = _mm_fmadd_ps(vec_c, row2, _mm_mul_ps(_mm_set1_ps(-s), row1));
 #else
-    __m128 new_row1 = _mm_add_ps(_mm_mul_ps(vec_c, row1), _mm_mul_ps(vec_s, row2));
-    __m128 new_row2 = _mm_sub_ps(_mm_mul_ps(vec_c, row2), _mm_mul_ps(vec_s, row1));
+    __m128 new_row1 = wcn_fma_mul_add_ps(vec_c, row1, _mm_mul_ps(vec_s, row2));
+    __m128 new_row2 = wcn_fma_mul_sub_ps(vec_c, row2, _mm_mul_ps(vec_s, row1));
 #endif
 
     // Store results
@@ -5716,8 +5712,10 @@ void WMATH_ROTATE_X(Mat4)(
     wcn_mat4_set_row(dst, 2, new_row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 3, row3);
     }
 
@@ -5745,8 +5743,10 @@ void WMATH_ROTATE_X(Mat4)(
     wcn_mat4_set_row(dst, 2, new_row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 3, row3);
     }
 
@@ -5774,71 +5774,77 @@ void WMATH_ROTATE_X(Mat4)(
     wcn_mat4_set_row(dst, 2, new_row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 3, row3);
     }
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // RISC-V Vector implementation - optimized X-axis rotation
-    size_t vl = vsetvlmax_e32m1();
+    size_t vl = __riscv_vsetvlmax_e32m1();
 
-    vfloat32m1_t row0 = wcn_mat4_get_row_riscv(&m, 0, vl);
-    vfloat32m1_t row1 = wcn_mat4_get_row_riscv(&m, 1, vl);
-    vfloat32m1_t row2 = wcn_mat4_get_row_riscv(&m, 2, vl);
-    vfloat32m1_t row3 = wcn_mat4_get_row_riscv(&m, 3, vl);
+    vfloat32m1_t row0 = wcn_mat4_get_row(&m, 0);
+    vfloat32m1_t row1 = wcn_mat4_get_row(&m, 1);
+    vfloat32m1_t row2 = wcn_mat4_get_row(&m, 2);
+    vfloat32m1_t row3 = wcn_mat4_get_row(&m, 3);
 
     // Precompute sine and cosine
     float c = cosf(angleInRadians);
     float s = sinf(angleInRadians);
-    vfloat32m1_t vec_c = vfmv_v_f_f32m1(c, vl);
-    vfloat32m1_t vec_s = vfmv_v_f_f32m1(s, vl);
-    vfloat32m1_t vec_neg_s = vfmv_v_f_f32m1(-s, vl);
+    vfloat32m1_t vec_c = __riscv_vfmv_v_f_f32m1(c, vl);
+    vfloat32m1_t vec_s = __riscv_vfmv_v_f_f32m1(s, vl);
+    vfloat32m1_t vec_neg_s = __riscv_vfmv_v_f_f32m1(-s, vl);
 
     // For X-axis rotation: row1' = c*row1 + s*row2, row2' = c*row2 - s*row1
     vfloat32m1_t new_row1 =
-        vfadd_vv_f32m1(vfmul_vv_f32m1(vec_c, row1, vl), vfmul_vv_f32m1(vec_s, row2, vl), vl);
+        __riscv_vfadd_vv_f32m1(__riscv_vfmul_vv_f32m1(vec_c, row1, vl), __riscv_vfmul_vv_f32m1(vec_s, row2, vl), vl);
     vfloat32m1_t new_row2 =
-        vfadd_vv_f32m1(vfmul_vv_f32m1(vec_c, row2, vl), vfmul_vv_f32m1(vec_neg_s, row1, vl), vl);
+        __riscv_vfadd_vv_f32m1(__riscv_vfmul_vv_f32m1(vec_c, row2, vl), __riscv_vfmul_vv_f32m1(vec_neg_s, row1, vl), vl);
 
     // Store results
-    wcn_mat4_set_row_riscv(dst, 0, row0, vl);
-    wcn_mat4_set_row_riscv(dst, 1, new_row1, vl);
-    wcn_mat4_set_row_riscv(dst, 2, new_row2, vl);
+    wcn_mat4_set_row(dst, 0, row0);
+    wcn_mat4_set_row(dst, 1, new_row1);
+    wcn_mat4_set_row(dst, 2, new_row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
-        wcn_mat4_set_row_riscv(dst, 3, row3, vl);
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
+        wcn_mat4_set_row(dst, 3, row3);
     }
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - optimized X-axis rotation
-    __m128 row0 = wcn_mat4_get_row_loongarch(&m, 0);
-    __m128 row1 = wcn_mat4_get_row_loongarch(&m, 1);
-    __m128 row2 = wcn_mat4_get_row_loongarch(&m, 2);
-    __m128 row3 = wcn_mat4_get_row_loongarch(&m, 3);
+    __m128 row0 = wcn_mat4_get_row(&m, 0);
+    __m128 row1 = wcn_mat4_get_row(&m, 1);
+    __m128 row2 = wcn_mat4_get_row(&m, 2);
+    __m128 row3 = wcn_mat4_get_row(&m, 3);
 
     // Precompute sine and cosine
     float c = cosf(angleInRadians);
     float s = sinf(angleInRadians);
-    __m128 vec_c = __lsx_vreplfr2vr_s(c);
-    __m128 vec_s = __lsx_vreplfr2vr_s(s);
-    __m128 vec_neg_s = __lsx_vreplfr2vr_s(-s);
+    __m128 vec_c = wcn_lsx_splat_f(c);
+    __m128 vec_s = wcn_lsx_splat_f(s);
+    __m128 vec_neg_s = wcn_lsx_splat_f(-s);
 
     // For X-axis rotation: row1' = c*row1 + s*row2, row2' = c*row2 - s*row1
-    __m128 new_row1 = __lsx_fadd_s(__lsx_fmul_s(vec_c, row1), __lsx_fmul_s(vec_s, row2));
-    __m128 new_row2 = __lsx_fadd_s(__lsx_fmul_s(vec_c, row2), __lsx_fmul_s(vec_neg_s, row1));
+    __m128 new_row1 = __lsx_vfadd_s(__lsx_vfmul_s(vec_c, row1), __lsx_vfmul_s(vec_s, row2));
+    __m128 new_row2 = __lsx_vfadd_s(__lsx_vfmul_s(vec_c, row2), __lsx_vfmul_s(vec_neg_s, row1));
 
     // Store results
-    wcn_mat4_set_row_loongarch(dst, 0, row0);
-    wcn_mat4_set_row_loongarch(dst, 1, new_row1);
-    wcn_mat4_set_row_loongarch(dst, 2, new_row2);
+    wcn_mat4_set_row(dst, 0, row0);
+    wcn_mat4_set_row(dst, 1, new_row1);
+    wcn_mat4_set_row(dst, 2, new_row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
-        wcn_mat4_set_row_loongarch(dst, 3, row3);
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
+        wcn_mat4_set_row(dst, 3, row3);
     }
 
 #else
@@ -5863,8 +5869,10 @@ void WMATH_ROTATE_X(Mat4)(
     dst->m[10] = c * m22 - s * m12;
     dst->m[11] = c * m23 - s * m13;
 
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[0] = m.m[0];
         dst->m[1] = m.m[1];
         dst->m[2] = m.m[2];
@@ -5911,8 +5919,8 @@ void WMATH_ROTATE_Y(Mat4)(
     __m128 new_row0 = _mm_fmadd_ps(vec_c, row0, _mm_mul_ps(_mm_set1_ps(-s), row2));
     __m128 new_row2 = _mm_fmadd_ps(vec_c, row2, _mm_mul_ps(vec_s, row0));
 #else
-    __m128 new_row0 = _mm_sub_ps(_mm_mul_ps(vec_c, row0), _mm_mul_ps(vec_s, row2));
-    __m128 new_row2 = _mm_add_ps(_mm_mul_ps(vec_c, row2), _mm_mul_ps(vec_s, row0));
+    __m128 new_row0 = wcn_fma_mul_sub_ps(vec_c, row0, _mm_mul_ps(vec_s, row2));
+    __m128 new_row2 = wcn_fma_mul_add_ps(vec_c, row2, _mm_mul_ps(vec_s, row0));
 #endif
 
     // Store results
@@ -5921,8 +5929,10 @@ void WMATH_ROTATE_Y(Mat4)(
     wcn_mat4_set_row(dst, 2, new_row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 3, row3);
     }
 
@@ -5950,8 +5960,10 @@ void WMATH_ROTATE_Y(Mat4)(
     wcn_mat4_set_row(dst, 2, new_row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 3, row3);
     }
 
@@ -5979,71 +5991,77 @@ void WMATH_ROTATE_Y(Mat4)(
     wcn_mat4_set_row(dst, 2, new_row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 3, row3);
     }
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // RISC-V Vector implementation - optimized Y-axis rotation
-    size_t vl = vsetvlmax_e32m1();
+    size_t vl = __riscv_vsetvlmax_e32m1();
 
-    vfloat32m1_t row0 = wcn_mat4_get_row_riscv(&m, 0, vl);
-    vfloat32m1_t row1 = wcn_mat4_get_row_riscv(&m, 1, vl);
-    vfloat32m1_t row2 = wcn_mat4_get_row_riscv(&m, 2, vl);
-    vfloat32m1_t row3 = wcn_mat4_get_row_riscv(&m, 3, vl);
+    vfloat32m1_t row0 = wcn_mat4_get_row(&m, 0);
+    vfloat32m1_t row1 = wcn_mat4_get_row(&m, 1);
+    vfloat32m1_t row2 = wcn_mat4_get_row(&m, 2);
+    vfloat32m1_t row3 = wcn_mat4_get_row(&m, 3);
 
     // Precompute sine and cosine
     float c = cosf(angleInRadians);
     float s = sinf(angleInRadians);
-    vfloat32m1_t vec_c = vfmv_v_f_f32m1(c, vl);
-    vfloat32m1_t vec_s = vfmv_v_f_f32m1(s, vl);
-    vfloat32m1_t vec_neg_s = vfmv_v_f_f32m1(-s, vl);
+    vfloat32m1_t vec_c = __riscv_vfmv_v_f_f32m1(c, vl);
+    vfloat32m1_t vec_s = __riscv_vfmv_v_f_f32m1(s, vl);
+    vfloat32m1_t vec_neg_s = __riscv_vfmv_v_f_f32m1(-s, vl);
 
     // For Y-axis rotation: row0' = c*row0 - s*row2, row2' = c*row2 + s*row0
     vfloat32m1_t new_row0 =
-        vfsub_vv_f32m1(vfmul_vv_f32m1(vec_c, row0, vl), vfmul_vv_f32m1(vec_s, row2, vl), vl);
+        __riscv_vfsub_vv_f32m1(__riscv_vfmul_vv_f32m1(vec_c, row0, vl), __riscv_vfmul_vv_f32m1(vec_s, row2, vl), vl);
     vfloat32m1_t new_row2 =
-        vfadd_vv_f32m1(vfmul_vv_f32m1(vec_c, row2, vl), vfmul_vv_f32m1(vec_s, row0, vl), vl);
+        __riscv_vfadd_vv_f32m1(__riscv_vfmul_vv_f32m1(vec_c, row2, vl), __riscv_vfmul_vv_f32m1(vec_s, row0, vl), vl);
 
     // Store results
-    wcn_mat4_set_row_riscv(dst, 0, new_row0, vl);
-    wcn_mat4_set_row_riscv(dst, 1, row1, vl);
-    wcn_mat4_set_row_riscv(dst, 2, new_row2, vl);
+    wcn_mat4_set_row(dst, 0, new_row0);
+    wcn_mat4_set_row(dst, 1, row1);
+    wcn_mat4_set_row(dst, 2, new_row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
-        wcn_mat4_set_row_riscv(dst, 3, row3, vl);
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
+        wcn_mat4_set_row(dst, 3, row3);
     }
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - optimized Y-axis rotation
-    __m128 row0 = wcn_mat4_get_row_loongarch(&m, 0);
-    __m128 row1 = wcn_mat4_get_row_loongarch(&m, 1);
-    __m128 row2 = wcn_mat4_get_row_loongarch(&m, 2);
-    __m128 row3 = wcn_mat4_get_row_loongarch(&m, 3);
+    __m128 row0 = wcn_mat4_get_row(&m, 0);
+    __m128 row1 = wcn_mat4_get_row(&m, 1);
+    __m128 row2 = wcn_mat4_get_row(&m, 2);
+    __m128 row3 = wcn_mat4_get_row(&m, 3);
 
     // Precompute sine and cosine
     float c = cosf(angleInRadians);
     float s = sinf(angleInRadians);
-    __m128 vec_c = __lsx_vreplfr2vr_s(c);
-    __m128 vec_s = __lsx_vreplfr2vr_s(s);
-    __m128 vec_neg_s = __lsx_vreplfr2vr_s(-s);
+    __m128 vec_c = wcn_lsx_splat_f(c);
+    __m128 vec_s = wcn_lsx_splat_f(s);
+    __m128 vec_neg_s = wcn_lsx_splat_f(-s);
 
     // For Y-axis rotation: row0' = c*row0 - s*row2, row2' = c*row2 + s*row0
-    __m128 new_row0 = __lsx_fsub_s(__lsx_fmul_s(vec_c, row0), __lsx_fmul_s(vec_s, row2));
-    __m128 new_row2 = __lsx_fadd_s(__lsx_fmul_s(vec_c, row2), __lsx_fmul_s(vec_s, row0));
+    __m128 new_row0 = __lsx_vfsub_s(__lsx_vfmul_s(vec_c, row0), __lsx_vfmul_s(vec_s, row2));
+    __m128 new_row2 = __lsx_vfadd_s(__lsx_vfmul_s(vec_c, row2), __lsx_vfmul_s(vec_s, row0));
 
     // Store results
-    wcn_mat4_set_row_loongarch(dst, 0, new_row0);
-    wcn_mat4_set_row_loongarch(dst, 1, row1);
-    wcn_mat4_set_row_loongarch(dst, 2, new_row2);
+    wcn_mat4_set_row(dst, 0, new_row0);
+    wcn_mat4_set_row(dst, 1, row1);
+    wcn_mat4_set_row(dst, 2, new_row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
-        wcn_mat4_set_row_loongarch(dst, 3, row3);
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
+        wcn_mat4_set_row(dst, 3, row3);
     }
 
 #else
@@ -6068,8 +6086,10 @@ void WMATH_ROTATE_Y(Mat4)(
     dst->m[10] = c * m22 + s * m02;
     dst->m[11] = c * m23 + s * m03;
 
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[4] = m.m[4];
         dst->m[5] = m.m[5];
         dst->m[6] = m.m[6];
@@ -6116,8 +6136,8 @@ void WMATH_ROTATE_Z(Mat4)(
     __m128 new_row0 = _mm_fmadd_ps(vec_c, row0, _mm_mul_ps(vec_s, row1));
     __m128 new_row1 = _mm_fmadd_ps(vec_c, row1, _mm_mul_ps(_mm_set1_ps(-s), row0));
 #else
-    __m128 new_row0 = _mm_add_ps(_mm_mul_ps(vec_c, row0), _mm_mul_ps(vec_s, row1));
-    __m128 new_row1 = _mm_sub_ps(_mm_mul_ps(vec_c, row1), _mm_mul_ps(vec_s, row0));
+    __m128 new_row0 = wcn_fma_mul_add_ps(vec_c, row0, _mm_mul_ps(vec_s, row1));
+    __m128 new_row1 = wcn_fma_mul_sub_ps(vec_c, row1, _mm_mul_ps(vec_s, row0));
 #endif
 
     // Store results
@@ -6126,8 +6146,10 @@ void WMATH_ROTATE_Z(Mat4)(
     wcn_mat4_set_row(dst, 2, row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 3, row3);
     }
 
@@ -6155,8 +6177,10 @@ void WMATH_ROTATE_Z(Mat4)(
     wcn_mat4_set_row(dst, 2, row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 3, row3);
     }
 
@@ -6184,71 +6208,77 @@ void WMATH_ROTATE_Z(Mat4)(
     wcn_mat4_set_row(dst, 2, row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         wcn_mat4_set_row(dst, 3, row3);
     }
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // RISC-V Vector implementation - optimized Z-axis rotation
-    size_t vl = vsetvlmax_e32m1();
+    size_t vl = __riscv_vsetvlmax_e32m1();
 
-    vfloat32m1_t row0 = wcn_mat4_get_row_riscv(&m, 0, vl);
-    vfloat32m1_t row1 = wcn_mat4_get_row_riscv(&m, 1, vl);
-    vfloat32m1_t row2 = wcn_mat4_get_row_riscv(&m, 2, vl);
-    vfloat32m1_t row3 = wcn_mat4_get_row_riscv(&m, 3, vl);
+    vfloat32m1_t row0 = wcn_mat4_get_row(&m, 0);
+    vfloat32m1_t row1 = wcn_mat4_get_row(&m, 1);
+    vfloat32m1_t row2 = wcn_mat4_get_row(&m, 2);
+    vfloat32m1_t row3 = wcn_mat4_get_row(&m, 3);
 
     // Precompute sine and cosine
     float c = cosf(angleInRadians);
     float s = sinf(angleInRadians);
-    vfloat32m1_t vec_c = vfmv_v_f_f32m1(c, vl);
-    vfloat32m1_t vec_s = vfmv_v_f_f32m1(s, vl);
-    vfloat32m1_t vec_neg_s = vfmv_v_f_f32m1(-s, vl);
+    vfloat32m1_t vec_c = __riscv_vfmv_v_f_f32m1(c, vl);
+    vfloat32m1_t vec_s = __riscv_vfmv_v_f_f32m1(s, vl);
+    vfloat32m1_t vec_neg_s = __riscv_vfmv_v_f_f32m1(-s, vl);
 
     // For Z-axis rotation: row0' = c*row0 + s*row1, row1' = c*row1 - s*row0
     vfloat32m1_t new_row0 =
-        vfadd_vv_f32m1(vfmul_vv_f32m1(vec_c, row0, vl), vfmul_vv_f32m1(vec_s, row1, vl), vl);
+        __riscv_vfadd_vv_f32m1(__riscv_vfmul_vv_f32m1(vec_c, row0, vl), __riscv_vfmul_vv_f32m1(vec_s, row1, vl), vl);
     vfloat32m1_t new_row1 =
-        vfadd_vv_f32m1(vfmul_vv_f32m1(vec_c, row1, vl), vfmul_vv_f32m1(vec_neg_s, row0, vl), vl);
+        __riscv_vfadd_vv_f32m1(__riscv_vfmul_vv_f32m1(vec_c, row1, vl), __riscv_vfmul_vv_f32m1(vec_neg_s, row0, vl), vl);
 
     // Store results
-    wcn_mat4_set_row_riscv(dst, 0, new_row0, vl);
-    wcn_mat4_set_row_riscv(dst, 1, new_row1, vl);
-    wcn_mat4_set_row_riscv(dst, 2, row2, vl);
+    wcn_mat4_set_row(dst, 0, new_row0);
+    wcn_mat4_set_row(dst, 1, new_row1);
+    wcn_mat4_set_row(dst, 2, row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
-        wcn_mat4_set_row_riscv(dst, 3, row3, vl);
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
+        wcn_mat4_set_row(dst, 3, row3);
     }
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - optimized Z-axis rotation
-    __m128 row0 = wcn_mat4_get_row_loongarch(&m, 0);
-    __m128 row1 = wcn_mat4_get_row_loongarch(&m, 1);
-    __m128 row2 = wcn_mat4_get_row_loongarch(&m, 2);
-    __m128 row3 = wcn_mat4_get_row_loongarch(&m, 3);
+    __m128 row0 = wcn_mat4_get_row(&m, 0);
+    __m128 row1 = wcn_mat4_get_row(&m, 1);
+    __m128 row2 = wcn_mat4_get_row(&m, 2);
+    __m128 row3 = wcn_mat4_get_row(&m, 3);
 
     // Precompute sine and cosine
     float c = cosf(angleInRadians);
     float s = sinf(angleInRadians);
-    __m128 vec_c = __lsx_vreplfr2vr_s(c);
-    __m128 vec_s = __lsx_vreplfr2vr_s(s);
-    __m128 vec_neg_s = __lsx_vreplfr2vr_s(-s);
+    __m128 vec_c = wcn_lsx_splat_f(c);
+    __m128 vec_s = wcn_lsx_splat_f(s);
+    __m128 vec_neg_s = wcn_lsx_splat_f(-s);
 
     // For Z-axis rotation: row0' = c*row0 + s*row1, row1' = c*row1 - s*row0
-    __m128 new_row0 = __lsx_fadd_s(__lsx_fmul_s(vec_c, row0), __lsx_fmul_s(vec_s, row1));
-    __m128 new_row1 = __lsx_fadd_s(__lsx_fmul_s(vec_c, row1), __lsx_fmul_s(vec_neg_s, row0));
+    __m128 new_row0 = __lsx_vfadd_s(__lsx_vfmul_s(vec_c, row0), __lsx_vfmul_s(vec_s, row1));
+    __m128 new_row1 = __lsx_vfadd_s(__lsx_vfmul_s(vec_c, row1), __lsx_vfmul_s(vec_neg_s, row0));
 
     // Store results
-    wcn_mat4_set_row_loongarch(dst, 0, new_row0);
-    wcn_mat4_set_row_loongarch(dst, 1, new_row1);
-    wcn_mat4_set_row_loongarch(dst, 2, row2);
+    wcn_mat4_set_row(dst, 0, new_row0);
+    wcn_mat4_set_row(dst, 1, new_row1);
+    wcn_mat4_set_row(dst, 2, row2);
 
     // Copy the fourth row unchanged if matrices are different
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
-        wcn_mat4_set_row_loongarch(dst, 3, row3);
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
+        wcn_mat4_set_row(dst, 3, row3);
     }
 
 #else
@@ -6273,8 +6303,10 @@ void WMATH_ROTATE_Z(Mat4)(
     dst->m[6] = c * m12 - s * m02;
     dst->m[7] = c * m13 - s * m03;
 
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[8] = m.m[8];
         dst->m[9] = m.m[9];
         dst->m[10] = m.m[10];
@@ -6432,18 +6464,18 @@ void WMATH_SCALE(Vec2)(
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // RISC-V Vector implementation
-    size_t vl = __riscv_vsetvli(4, __RISCV_VTYPE_F32, __RISCV_VLMUL_1);
-    vfloat32m1_t vec_v = wcn_load_vec2_partial_riscv(v.v, vl);
+    size_t vl = __riscv_vsetvl_e32m1(4);
+    vfloat32m1_t vec_v = wcn_load_vec2_partial(v.v);
     vfloat32m1_t vec_scale = __riscv_vfmv_v_f_f32m1(scale, vl);
     vfloat32m1_t vec_res = __riscv_vfmul_vv_f32m1(vec_v, vec_scale, vl);
-    wcn_store_vec2_partial_riscv(dst->v, vec_res, vl);
+    wcn_store_vec2_partial(dst->v, vec_res);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation
-    __m128 vec_v = wcn_load_vec2_partial_loongarch(v.v);
-    __m128 vec_scale = __lsx_vreplfr2vr_s(scale);
+    __m128 vec_v = wcn_load_vec2_partial(v.v);
+    __m128 vec_scale = wcn_lsx_splat_f(scale);
     __m128 vec_res = __lsx_vfmul_s(vec_v, vec_scale);
-    wcn_store_vec2_partial_loongarch(dst->v, vec_res);
+    wcn_store_vec2_partial(dst->v, vec_res);
 
 #else
     // Scalar fallback
@@ -6491,9 +6523,11 @@ void WMATH_SCALE(Mat3)(
     __m128 vec_result1 = _mm_mul_ps(vec_row1, vec_v1);
     _mm_storeu_ps(&dst->m[4], vec_result1);
 
-    // Copy third row (indices 8-11) if needed
-    if (_mm_movemask_ps(_mm_cmpneq_ps(vec_result0, vec_row0)) != 0 ||
-        _mm_movemask_ps(_mm_cmpneq_ps(vec_result1, vec_row1)) != 0) {
+    // Copy third row (indices 8-11). Unconditional: m is passed by value so
+    // dst can never alias it, and the old value-comparison guard left dst row
+    // 2 uninitialised whenever the scale happened to be (1,1) with dst != m
+    // (LOGIC_BUGS.md L-11 family).
+    {
         __m128 vec_row2 = _mm_loadu_ps(&m.m[8]);
         _mm_storeu_ps(&dst->m[8], vec_row2);
     }
@@ -6513,10 +6547,8 @@ void WMATH_SCALE(Mat3)(
     float32x4_t vec_result1 = vmulq_f32(vec_row1, vec_v1);
     vst1q_f32(&dst->m[4], vec_result1);
 
-    // Copy third row (indices 8-11) if needed
-    uint32x4_t cmp0 = vceqq_f32(vec_result0, vec_row0);
-    uint32x4_t cmp1 = vceqq_f32(vec_result1, vec_row1);
-    if (vminvq_u32(cmp0) == 0 || vminvq_u32(cmp1) == 0) {
+    // Copy third row (indices 8-11). Unconditional (see the SSE note above).
+    {
         float32x4_t vec_row2 = vld1q_f32(&m.m[8]);
         vst1q_f32(&dst->m[8], vec_row2);
     }
@@ -6536,22 +6568,12 @@ void WMATH_SCALE(Mat3)(
     v128_t vec_result1 = wasm_f32x4_mul(vec_row1, vec_v1);
     wasm_v128_store(&dst->m[4], vec_result1);
 
-    // Copy third row (indices 8-11) if needed
-    int cmp0 = wasm_f32x4_extract_lane(vec_result0, 0) != wasm_f32x4_extract_lane(vec_row0, 0) ||
-               wasm_f32x4_extract_lane(vec_result0, 1) != wasm_f32x4_extract_lane(vec_row0, 1) ||
-               wasm_f32x4_extract_lane(vec_result0, 2) != wasm_f32x4_extract_lane(vec_row0, 2) ||
-               wasm_f32x4_extract_lane(vec_result0, 3) != wasm_f32x4_extract_lane(vec_row0, 3);
-    int cmp1 = wasm_f32x4_extract_lane(vec_result1, 0) != wasm_f32x4_extract_lane(vec_row1, 0) ||
-               wasm_f32x4_extract_lane(vec_result1, 1) != wasm_f32x4_extract_lane(vec_row1, 1) ||
-               wasm_f32x4_extract_lane(vec_result1, 2) != wasm_f32x4_extract_lane(vec_row1, 2) ||
-               wasm_f32x4_extract_lane(vec_result1, 3) != wasm_f32x4_extract_lane(vec_row1, 3);
-    if (cmp0 || cmp1) {
-        wasm_v128_store(&dst->m[8], wasm_v128_load(&m.m[8]));  // Copy the third row
-    }
+    // Copy third row (indices 8-11). Unconditional (see the SSE note above).
+    wasm_v128_store(&dst->m[8], wasm_v128_load(&m.m[8]));
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // RISC-V Vector implementation
-    size_t vl = __riscv_vsetvli(4, __RISCV_VTYPE_F32, __RISCV_VLMUL_1);
+    size_t vl = __riscv_vsetvl_e32m1(4);
 
     vfloat32m1_t vec_v0 = __riscv_vfmv_v_f_f32m1(v.v[0], vl);  // Broadcast v0 to all elements
     vfloat32m1_t vec_v1 = __riscv_vfmv_v_f_f32m1(v.v[1], vl);  // Broadcast v1 to all elements
@@ -6566,19 +6588,13 @@ void WMATH_SCALE(Mat3)(
     vfloat32m1_t vec_result1 = __riscv_vfmul_vv_f32m1(vec_row1, vec_v1, vl);
     __riscv_vse32_v_f32m1(&dst->m[4], vec_result1, vl);
 
-    // Copy third row (indices 8-11) if needed
-    vbool32_t cmp0 = __riscv_vmfeq_vv_f32m1_b32(vec_result0, vec_row0, vl);
-    vbool32_t cmp1 = __riscv_vmfeq_vv_f32m1_b32(vec_result1, vec_row1, vl);
-    if (__riscv_vfirst_m_b32(__riscv_vmnot_m_b32(cmp0, vl), vl) >= 0 ||
-        __riscv_vfirst_m_b32(__riscv_vmnot_m_b32(cmp1, vl), vl) >= 0) {
-        vfloat32m1_t vec_row2 = __riscv_vle32_v_f32m1(&m.m[8], vl);
-        __riscv_vse32_v_f32m1(&dst->m[8], vec_row2, vl);
-    }
+    // Copy third row (indices 8-11). Unconditional (see the SSE note above).
+    __riscv_vse32_v_f32m1(&dst->m[8], __riscv_vle32_v_f32m1(&m.m[8], vl), vl);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation
-    __m128 vec_v0 = __lsx_vreplfr2vr_s(v.v[0]);  // Broadcast v0 to all elements
-    __m128 vec_v1 = __lsx_vreplfr2vr_s(v.v[1]);  // Broadcast v1 to all elements
+    __m128 vec_v0 = wcn_lsx_splat_f(v.v[0]);  // Broadcast v0 to all elements
+    __m128 vec_v1 = wcn_lsx_splat_f(v.v[1]);  // Broadcast v1 to all elements
 
     // Scale first row (indices 0-3)
     __m128 vec_row0 = __lsx_vld(&m.m[0], 0);
@@ -6590,19 +6606,8 @@ void WMATH_SCALE(Mat3)(
     __m128 vec_result1 = __lsx_vfmul_s(vec_row1, vec_v1);
     __lsx_vst(vec_result1, &dst->m[4], 0);
 
-    // Copy third row (indices 8-11) if needed
-    int cmp0 = __lsx_vpickve2gr_w(vec_result0, 0) != __lsx_vpickve2gr_w(vec_row0, 0) ||
-               __lsx_vpickve2gr_w(vec_result0, 1) != __lsx_vpickve2gr_w(vec_row0, 1) ||
-               __lsx_vpickve2gr_w(vec_result0, 2) != __lsx_vpickve2gr_w(vec_row0, 2) ||
-               __lsx_vpickve2gr_w(vec_result0, 3) != __lsx_vpickve2gr_w(vec_row0, 3);
-    int cmp1 = __lsx_vpickve2gr_w(vec_result1, 0) != __lsx_vpickve2gr_w(vec_row1, 0) ||
-               __lsx_vpickve2gr_w(vec_result1, 1) != __lsx_vpickve2gr_w(vec_row1, 1) ||
-               __lsx_vpickve2gr_w(vec_result1, 2) != __lsx_vpickve2gr_w(vec_row1, 2) ||
-               __lsx_vpickve2gr_w(vec_result1, 3) != __lsx_vpickve2gr_w(vec_row1, 3);
-    if (cmp0 || cmp1) {
-        __m128 vec_row2 = __lsx_vld(&m.m[8], 0);
-        __lsx_vst(vec_row2, &dst->m[8], 0);
-    }
+    // Copy third row (indices 8-11). Unconditional (see the SSE note above).
+    __lsx_vst(__lsx_vld(&m.m[8], 0), &dst->m[8], 0);
 
 #else
     // Scalar fallback (original implementation)
@@ -6617,8 +6622,10 @@ void WMATH_SCALE(Mat3)(
     dst->m[5] = v1 * m.m[1 * 4 + 1];
     dst->m[6] = v1 * m.m[1 * 4 + 2];
 
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[8] = m.m[8];
         dst->m[9] = m.m[9];
         dst->m[10] = m.m[10];
@@ -6653,12 +6660,10 @@ void WMATH_SCALE(Mat4)(
     __m128 vec_result2 = _mm_mul_ps(vec_row2, vec_v2);
     _mm_storeu_ps(&dst->m[8], vec_result2);
 
-    // Check if any element changed and copy last row if needed
-    __m128 cmp0 = _mm_cmpneq_ps(vec_result0, vec_row0);
-    __m128 cmp1 = _mm_cmpneq_ps(vec_result1, vec_row1);
-    __m128 cmp2 = _mm_cmpneq_ps(vec_result2, vec_row2);
-
-    if (_mm_movemask_ps(_mm_or_ps(_mm_or_ps(cmp0, cmp1), cmp2)) != 0) {
+    // Copy the fourth row (indices 12-15). Unconditional: m is passed by
+    // value so dst can never alias it, and the value-comparison guard read
+    // uninitialised dst (LOGIC_BUGS.md L-11 family).
+    {
         __m128 vec_row3 = _mm_loadu_ps(&m.m[12]);
         _mm_storeu_ps(&dst->m[12], vec_row3);
     }
@@ -6684,12 +6689,8 @@ void WMATH_SCALE(Mat4)(
     float32x4_t vec_result2 = vmulq_f32(vec_row2, vec_v2);
     vst1q_f32(&dst->m[8], vec_result2);
 
-    // Check if any element changed and copy last row if needed
-    uint32x4_t cmp0 = vceqq_f32(vec_result0, vec_row0);
-    uint32x4_t cmp1 = vceqq_f32(vec_result1, vec_row1);
-    uint32x4_t cmp2 = vceqq_f32(vec_result2, vec_row2);
-
-    if (vminvq_u32(cmp0) == 0 || vminvq_u32(cmp1) == 0 || vminvq_u32(cmp2) == 0) {
+    // Copy the fourth row (indices 12-15). Unconditional (see the SSE note).
+    {
         float32x4_t vec_row3 = vld1q_f32(&m.m[12]);
         vst1q_f32(&dst->m[12], vec_row3);
     }
@@ -6721,8 +6722,7 @@ void WMATH_SCALE(Mat4)(
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     // RISC-V Vector Extension implementation
-    size_t vl = __riscv_vsetvli(4, __RISCV_VTYPE_F32,
-                                __RISCV_VLMUL_1);  // Set vector length to 4 for 4 floats
+    size_t vl = __riscv_vsetvl_e32m1(4);  // Set vector length to 4 for 4 floats
 
     // Create broadcast vectors for scaling values
     vfloat32m1_t vec_v0 = __riscv_vfmv_v_f_f32m1(v.v[0], vl);  // Broadcast v0 to all elements
@@ -6744,17 +6744,8 @@ void WMATH_SCALE(Mat4)(
     vfloat32m1_t vec_result2 = __riscv_vfmul_vv_f32m1(vec_row2, vec_v2, vl);  // Multiply by v2
     __riscv_vse32_v_f32m1(&dst->m[8], vec_result2, vl);                       // Store result
 
-    // Check if any element changed, then copy last row
-    vbool32_t cmp0 = __riscv_vmfne_vv_f32m1_b32(vec_result0, vec_row0, vl);
-    vbool32_t cmp1 = __riscv_vmfne_vv_f32m1_b32(vec_result1, vec_row1, vl);
-    vbool32_t cmp2 = __riscv_vmfne_vv_f32m1_b32(vec_result2, vec_row2, vl);
-
-    // If any element changed in any row, copy the last row
-    if (__riscv_vfirst_m_b32(__riscv_vor_mm_b32(__riscv_vor_mm_b32(cmp0, cmp1, vl), cmp2, vl),
-                             vl) >= 0) {
-        vfloat32m1_t vec_row3 = __riscv_vle32_v_f32m1(&m.m[12], vl);
-        __riscv_vse32_v_f32m1(&dst->m[12], vec_row3, vl);
-    }
+    // Copy the fourth row (indices 12-15). Unconditional (see the SSE note).
+    __riscv_vse32_v_f32m1(&dst->m[12], __riscv_vle32_v_f32m1(&m.m[12], vl), vl);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation
@@ -6800,8 +6791,10 @@ void WMATH_SCALE(Mat4)(
     dst->m[10] = v2 * m.m[2 * 4 + 2];
     dst->m[11] = v2 * m.m[2 * 4 + 3];
 
-    WMATH_TYPE(Mat4) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat4)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[12] = m.m[12];
         dst->m[13] = m.m[13];
         dst->m[14] = m.m[14];
@@ -6885,9 +6878,9 @@ void WMATH_CALL(Mat3, scale3D)(
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation
-    __m128 vec_v0 = __lsx_vreplgr2vr_s(v.v[0]);  // Broadcast v0 to all elements
-    __m128 vec_v1 = __lsx_vreplgr2vr_s(v.v[1]);  // Broadcast v1 to all elements
-    __m128 vec_v2 = __lsx_vreplgr2vr_s(v.v[2]);  // Broadcast v2 to all elements
+    __m128 vec_v0 = wcn_lsx_splat_f(v.v[0]);  // Broadcast v0 to all elements
+    __m128 vec_v1 = wcn_lsx_splat_f(v.v[1]);  // Broadcast v1 to all elements
+    __m128 vec_v2 = wcn_lsx_splat_f(v.v[2]);  // Broadcast v2 to all elements
 
     // Scale first row (indices 0-3)
     __m128 vec_row0 = wcn_mat3_get_row(&m, 0);
@@ -6924,6 +6917,23 @@ void WMATH_CALL(Mat3, scale3D)(
     v128_t vec_row2 = wcn_mat3_get_row(&m, 2);
     v128_t vec_result2 = wasm_f32x4_mul(vec_row2, vec_v2);
     wcn_mat3_set_row(dst, 2, vec_result2);
+
+#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
+    /* Row-wise multiply by a broadcast scalar; same three row operations as the
+     * other backends. RVV spells the broadcast with vfmv_v_f_f32m1 and the
+     * multiply with vfmul_vv. */
+    {
+        const size_t vl = __riscv_vsetvl_e32m1(4);
+        const vfloat32m1_t b0 = __riscv_vfmv_v_f_f32m1(v.v[0], vl);
+        const vfloat32m1_t b1 = __riscv_vfmv_v_f_f32m1(v.v[1], vl);
+        const vfloat32m1_t b2 = __riscv_vfmv_v_f_f32m1(v.v[2], vl);
+        const vfloat32m1_t r0 = __riscv_vle32_v_f32m1(&m.m[0], vl);
+        const vfloat32m1_t r1 = __riscv_vle32_v_f32m1(&m.m[4], vl);
+        const vfloat32m1_t r2 = __riscv_vle32_v_f32m1(&m.m[8], vl);
+        __riscv_vse32_v_f32m1(&dst->m[0], __riscv_vfmul_vv_f32m1(r0, b0, vl), vl);
+        __riscv_vse32_v_f32m1(&dst->m[4], __riscv_vfmul_vv_f32m1(r1, b1, vl), vl);
+        __riscv_vse32_v_f32m1(&dst->m[8], __riscv_vfmul_vv_f32m1(r2, b2, vl), vl);
+    }
 
 #else
     // Scalar fallback (original implementation)
@@ -7025,8 +7035,10 @@ void WMATH_CALL(Mat3, uniform_scale)(
     _mm_storeu_ps(&dst->m[4], scaled_row1);
 
     // Copy the third row unchanged if matrices are different
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[8] = m.m[8];
         dst->m[9] = m.m[9];
         dst->m[10] = m.m[10];
@@ -7047,8 +7059,10 @@ void WMATH_CALL(Mat3, uniform_scale)(
     vst1q_f32(&dst->m[4], scaled_row1);
 
     // Copy the third row unchanged if matrices are different
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[8] = m.m[8];
         dst->m[9] = m.m[9];
         dst->m[10] = m.m[10];
@@ -7070,8 +7084,10 @@ void WMATH_CALL(Mat3, uniform_scale)(
     __riscv_vse32_v_f32m1(&dst->m[4], scaled_row1, vl);
 
     // Copy the third row unchanged if matrices are different
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[8] = m.m[8];
         dst->m[9] = m.m[9];
         dst->m[10] = m.m[10];
@@ -7079,7 +7095,7 @@ void WMATH_CALL(Mat3, uniform_scale)(
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - process first two rows with SIMD
-    __m128 vec_s = __lsx_vreplgr2vr_s(s);
+    __m128 vec_s = wcn_lsx_splat_f(s);
     __m128 row0 = __lsx_vld(&m.m[0], 0);  // Load first row [m00, m01, m02, pad]
     __m128 row1 = __lsx_vld(&m.m[4], 0);  // Load second row [m10, m11, m12, pad]
 
@@ -7092,8 +7108,10 @@ void WMATH_CALL(Mat3, uniform_scale)(
     __lsx_vst(scaled_row1, &dst->m[4], 0);
 
     // Copy the third row unchanged if matrices are different
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[8] = m.m[8];
         dst->m[9] = m.m[9];
         dst->m[10] = m.m[10];
@@ -7114,11 +7132,25 @@ void WMATH_CALL(Mat3, uniform_scale)(
     wasm_v128_store(&dst->m[4], scaled_row1);
 
     // Copy the third row unchanged if matrices are different
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[8] = m.m[8];
         dst->m[9] = m.m[9];
         dst->m[10] = m.m[10];
+    }
+
+#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
+    /* Uniform scale: one broadcast, three row multiplies (Mat3 has a padding
+     * lane per row, so all four lanes are scaled exactly as the SSE branch does). */
+    {
+        /* Constructs the matrix; there is no input matrix here. Rows are the constants
+         * [s,0,0,0], [0,s,0,0], [0,0,1,0], matching the SSE branch beside this one. */
+        const size_t vl = __riscv_vsetvl_e32m1(4);
+        __riscv_vse32_v_f32m1(&dst->m[0], wcn_rvv_make4_f(s, 0.0f, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[4], wcn_rvv_make4_f(0.0f, s, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[8], wcn_rvv_make4_f(0.0f, 0.0f, 1.0f, 0.0f), vl);
     }
 
 #else
@@ -7129,8 +7161,10 @@ void WMATH_CALL(Mat3, uniform_scale)(
     dst->m[4] = s * m.m[4];
     dst->m[5] = s * m.m[5];
     dst->m[6] = s * m.m[6];
-    WMATH_TYPE(Mat3) temp_dst = *dst;
-    if (!WMATH_EQUALS(Mat3)(temp_dst, m)) {
+    // m is passed by value, so dst can never alias it: the copy below is
+    // unconditional. The old guard read *dst to compare -- undefined on a fresh
+    // destination (LOGIC_BUGS.md L-11 family) and cost a full matrix copy.
+    if (1) {
         dst->m[8] = m.m[8];
         dst->m[9] = m.m[9];
         dst->m[10] = m.m[10];
@@ -7206,7 +7240,7 @@ void WMATH_CALL(Mat3, uniform_scale_3D)(
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - process all three rows with SIMD
-    __m128 vec_s = __lsx_vreplgr2vr_s(s);
+    __m128 vec_s = wcn_lsx_splat_f(s);
     __m128 row0 = __lsx_vld(&m.m[0], 0);  // Load first row [m00, m01, m02, pad]
     __m128 row1 = __lsx_vld(&m.m[4], 0);  // Load second row [m10, m11, m12, pad]
     __m128 row2 = __lsx_vld(&m.m[8], 0);  // Load third row [m20, m21, m22, pad]
@@ -7238,6 +7272,18 @@ void WMATH_CALL(Mat3, uniform_scale_3D)(
     wasm_v128_store(&dst->m[4], scaled_row1);
     wasm_v128_store(&dst->m[8], scaled_row2);
 
+#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
+    /* Uniform scale: one broadcast, three row multiplies (Mat3 has a padding
+     * lane per row, so all four lanes are scaled exactly as the SSE branch does). */
+    {
+        /* Constructs the matrix; this function receives no input matrix. Diagonal s with
+         * m22 = 1, matching the scalar fallback below. */
+        const size_t vl = __riscv_vsetvl_e32m1(4);
+        __riscv_vse32_v_f32m1(&dst->m[0], wcn_rvv_make4_f(s, 0.0f, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[4], wcn_rvv_make4_f(0.0f, s, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[8], wcn_rvv_make4_f(0.0f, 0.0f, 1.0f, 0.0f), vl);
+    }
+
 #else
     // Scalar fallback with optimized loop unrolling
     dst->m[0] = s * m.m[0];
@@ -7261,20 +7307,14 @@ void WMATH_CALL(Mat3, uniform_scale_3D)(
 void WMATH_CALL(Mat3, uniform_scaling)(DST_MAT3, float s) {
 
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-    // SSE implementation - create uniform scaling matrix efficiently
-    __m128 vec_s = _mm_set1_ps(s);
-    __m128 vec_zero = _mm_setzero_ps();
-    __m128 vec_one = _mm_set1_ps(1.0f);
-
-    // Create rows: [s, 0, 0, pad], [0, s, 0, pad], [0, 0, 1, pad]
-    __m128 row0 = _mm_move_ss(vec_s, vec_zero);  // [0, s, 0, 0] -> shuffle to [s, 0, 0, pad]
-    row0 = _mm_shuffle_ps(row0, vec_zero, _MM_SHUFFLE(0, 0, 2, 0));  // [s, 0, 0, pad]
-
-    __m128 row1 = _mm_move_ss(vec_zero, vec_s);  // [s, 0, 0, 0] -> shuffle to [0, s, 0, pad]
-    row1 = _mm_shuffle_ps(row1, vec_zero, _MM_SHUFFLE(0, 2, 0, 1));  // [0, s, 0, pad]
-
-    __m128 row2 = _mm_move_ss(vec_zero, vec_one);  // [1, 0, 0, 0] -> shuffle to [0, 0, 1, pad]
-    row2 = _mm_shuffle_ps(row2, vec_zero, _MM_SHUFFLE(0, 2, 1, 0));  // [0, 0, 1, pad]
+    // SSE implementation. Rows are the constants [s,0,0,0], [0,s,0,0],
+    // [0,0,1,0]; _mm_setr_ps compiles to plain movaps stores and is correct.
+    // The previous move_ss/shuffle chain mixed the lanes up: row0 came out
+    // [0,s,0,0] and row2 [1,0,0,0], so the s and 1 landed off the diagonal.
+    const __m128 vec_s = _mm_set1_ps(s);
+    const __m128 row0 = _mm_and_ps(vec_s, _mm_castsi128_ps(_mm_setr_epi32(-1, 0, 0, 0)));
+    const __m128 row1 = _mm_and_ps(vec_s, _mm_castsi128_ps(_mm_setr_epi32(0, -1, 0, 0)));
+    const __m128 row2 = _mm_setr_ps(0.0f, 0.0f, 1.0f, 0.0f);
 
     // Store results
     _mm_storeu_ps(&dst->m[0], row0);
@@ -7325,14 +7365,12 @@ void WMATH_CALL(Mat3, uniform_scaling)(DST_MAT3, float s) {
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - create uniform scaling matrix efficiently
-    __m128 vec_s = __lsx_vreplgr2vr_s(s);
+    __m128 vec_s = wcn_lsx_splat_f(s);
     __m128 vec_zero = __lsx_vldi(0);  // Load immediate zero
-    __m128 vec_one = __lsx_vreplgr2vr_s(1.0f);
+    __m128 vec_one = wcn_lsx_splat_f(1.0f);
 
     // Create rows: [s, 0, 0, pad], [0, s, 0, pad], [0, 0, 1, pad]
     __m128 row0 = __lsx_vilvl_w(vec_zero, vec_s);  // [s, 0, pad, pad]
-    row0 = __lsx_vori_b(row0, row0,
-                        0);  // Manually set for [s, 0, 0, pad] - since we need more control
     // Manual setting using individual operations
     __lsx_vstelm_w(vec_s, &dst->m[0], 0, 0);  // Set m[0] = s
     dst->m[1] = 0.0f;
@@ -7363,6 +7401,17 @@ void WMATH_CALL(Mat3, uniform_scaling)(DST_MAT3, float s) {
     wasm_v128_store(&dst->m[8], vec_zero);
     dst->m[10] = 1.0f;
 
+#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
+    /* Uniform scale: one broadcast, three row multiplies (Mat3 has a padding
+     * lane per row, so all four lanes are scaled exactly as the SSE branch does). */
+    {
+        /* Same construction, but m22 takes s as well (uniform_scaling_3D). */
+        const size_t vl = __riscv_vsetvl_e32m1(4);
+        __riscv_vse32_v_f32m1(&dst->m[0], wcn_rvv_make4_f(s, 0.0f, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[4], wcn_rvv_make4_f(0.0f, s, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[8], wcn_rvv_make4_f(0.0f, 0.0f, s, 0.0f), vl);
+    }
+
 #else
     // Scalar fallback - zero initialization is more efficient than memset
     dst->m[0] = s;
@@ -7386,22 +7435,13 @@ void WMATH_CALL(Mat3, uniform_scaling)(DST_MAT3, float s) {
 void WMATH_CALL(Mat3, uniform_scaling_3D)(DST_MAT3, float s) {
 
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-    // SSE implementation - create uniform 3D scaling matrix efficiently
-    __m128 vec_s = _mm_set1_ps(s);
-    __m128 vec_zero = _mm_setzero_ps();
-
-    // Create diagonal matrix with s on diagonal
-    // Row0: [s, 0, 0, pad]
-    __m128 row0 = _mm_move_ss(vec_s, vec_zero);
-    row0 = _mm_shuffle_ps(row0, vec_zero, _MM_SHUFFLE(0, 0, 2, 0));
-
-    // Row1: [0, s, 0, pad]
-    __m128 row1 = _mm_move_ss(vec_zero, vec_s);
-    row1 = _mm_shuffle_ps(row1, vec_zero, _MM_SHUFFLE(0, 2, 0, 1));
-
-    // Row2: [0, 0, s, pad]
-    __m128 row2 = _mm_move_ss(vec_zero, vec_s);
-    row2 = _mm_shuffle_ps(row2, vec_zero, _MM_SHUFFLE(0, 2, 1, 0));
+    // SSE implementation: diagonal [s,s,s]. The shuffle chain from the
+    // move_ss era mixed lanes the same way WMATH_CALL(Mat3, uniform_scaling)
+    // did; constants are correct and let the compiler fold them into movaps.
+    const __m128 vec_s = _mm_set1_ps(s);
+    const __m128 row0 = _mm_and_ps(vec_s, _mm_castsi128_ps(_mm_setr_epi32(-1, 0, 0, 0)));
+    const __m128 row1 = _mm_and_ps(vec_s, _mm_castsi128_ps(_mm_setr_epi32(0, -1, 0, 0)));
+    const __m128 row2 = _mm_and_ps(vec_s, _mm_castsi128_ps(_mm_setr_epi32(0, 0, -1, 0)));
 
     // Store results
     _mm_storeu_ps(&dst->m[0], row0);
@@ -7449,7 +7489,7 @@ void WMATH_CALL(Mat3, uniform_scaling_3D)(DST_MAT3, float s) {
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - create uniform 3D scaling matrix efficiently
-    __m128 vec_s = __lsx_vreplgr2vr_s(s);
+    __m128 vec_s = wcn_lsx_splat_f(s);
     __m128 vec_zero = __lsx_vldi(0);  // Load immediate zero
 
     // Create diagonal matrix: [s, 0, 0, pad], [0, s, 0, pad], [0, 0, s, pad]
@@ -7482,6 +7522,17 @@ void WMATH_CALL(Mat3, uniform_scaling_3D)(DST_MAT3, float s) {
     wasm_v128_store(&dst->m[8], vec_zero);
     dst->m[9] = 0.0f;
     dst->m[10] = s;
+
+#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
+    /* Uniform scale: one broadcast, three row multiplies (Mat3 has a padding
+     * lane per row, so all four lanes are scaled exactly as the SSE branch does). */
+    {
+        /* Constructs the matrix; this function receives no input matrix. */
+        const size_t vl = __riscv_vsetvl_e32m1(4);
+        __riscv_vse32_v_f32m1(&dst->m[0], wcn_rvv_make4_f(s, 0.0f, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[4], wcn_rvv_make4_f(0.0f, s, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[8], wcn_rvv_make4_f(0.0f, 0.0f, s, 0.0f), vl);
+    }
 
 #else
     // Scalar fallback - direct assignment is more efficient
@@ -7599,6 +7650,17 @@ void WMATH_CALL(Mat4, get_scaling)(DST_VEC3, WMATH_TYPE(Mat4) m) {
                         wasm_f32x4_extract_lane(sq2, 2));
     dst->v[2] = z_sum;
 
+#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
+    /* Gather the length of each of the first three columns. The columns are
+     * strided by 4, so load the full 16 floats as an m4 group and gather. */
+    {
+        /* Three strided scalars per column; the scalar fallback below states the same
+         * expressions, so both paths agree by construction. */
+        dst->v[0] = sqrtf(m.m[0] * m.m[0] + m.m[4] * m.m[4] + m.m[8] * m.m[8]);
+        dst->v[1] = sqrtf(m.m[1] * m.m[1] + m.m[5] * m.m[5] + m.m[9] * m.m[9]);
+        dst->v[2] = sqrtf(m.m[2] * m.m[2] + m.m[6] * m.m[6] + m.m[10] * m.m[10]);
+    }
+
 #else
     // Scalar fallback
     dst->v[0] = sqrtf(m.m[0] * m.m[0] + m.m[1] * m.m[1] + m.m[2] * m.m[2]);
@@ -7708,6 +7770,20 @@ void WMATH_CALL(Mat4, scaling)(DST_MAT4, WMATH_TYPE(Vec3) v) {
     wasm_v128_store(&dst->m[8], col2);
     wasm_v128_store(&dst->m[12], col3);
 
+#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
+    /* Scale each row by the matching component of v; the fourth row is left
+     * untouched, matching the other backends. */
+    {
+        const size_t vl = __riscv_vsetvl_e32m1(4);
+        /* Constructs the matrix; no input matrix here. Diagonal (v.x, v.y, v.z) with
+         * m15 = 1, matching the scalar fallback below. */
+        const size_t vl4 = __riscv_vsetvl_e32m1(4);
+        __riscv_vse32_v_f32m1(&dst->m[0], wcn_rvv_make4_f(v.v[0], 0.0f, 0.0f, 0.0f), vl4);
+        __riscv_vse32_v_f32m1(&dst->m[4], wcn_rvv_make4_f(0.0f, v.v[1], 0.0f, 0.0f), vl4);
+        __riscv_vse32_v_f32m1(&dst->m[8], wcn_rvv_make4_f(0.0f, 0.0f, v.v[2], 0.0f), vl4);
+        __riscv_vse32_v_f32m1(&dst->m[12], wcn_rvv_make4_f(0.0f, 0.0f, 0.0f, 1.0f), vl4);
+    }
+
 #else
     // Scalar fallback
     memset(dst, 0, sizeof(WMATH_TYPE(Mat4)));
@@ -7739,10 +7815,10 @@ void WMATH_CALL(Mat4, uniform_scale)(DST_MAT4, WMATH_TYPE(Mat4) m, float s) {
     wcn_mat4_set_row(dst, 1, scaled_row1);
     wcn_mat4_set_row(dst, 2, scaled_row2);
 
-    // Copy the fourth row (translation part) unchanged if matrices are different
-    if (!WMATH_EQUALS(Mat4)(*dst, m)) {
-        wcn_mat4_set_row(dst, 3, row3);
-    }
+    // Copy the fourth row (translation part). Unconditional: m is by value, the
+    // original's `m !== newDst` reference guard is always true here, and the
+    // value comparison read dst mid-write (LOGIC_BUGS.md L-11 family).
+    wcn_mat4_set_row(dst, 3, row3);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
     // NEON implementation - process first three rows with SIMD
@@ -7762,10 +7838,10 @@ void WMATH_CALL(Mat4, uniform_scale)(DST_MAT4, WMATH_TYPE(Mat4) m, float s) {
     wcn_mat4_set_row(dst, 1, scaled_row1);
     wcn_mat4_set_row(dst, 2, scaled_row2);
 
-    // Copy the fourth row (translation part) unchanged if matrices are different
-    if (!WMATH_EQUALS(Mat4)(*dst, m)) {
-        wcn_mat4_set_row(dst, 3, row3);
-    }
+    // Copy the fourth row (translation part). Unconditional: m is by value, the
+    // original's `m !== newDst` reference guard is always true here, and the
+    // value comparison read dst mid-write (LOGIC_BUGS.md L-11 family).
+    wcn_mat4_set_row(dst, 3, row3);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV
     // RISC-V Vector Extension implementation - process first three rows with SIMD
@@ -7786,14 +7862,14 @@ void WMATH_CALL(Mat4, uniform_scale)(DST_MAT4, WMATH_TYPE(Mat4) m, float s) {
     wcn_mat4_set_row(dst, 1, scaled_row1);
     wcn_mat4_set_row(dst, 2, scaled_row2);
 
-    // Copy the fourth row (translation part) unchanged if matrices are different
-    if (!WMATH_EQUALS(Mat4)(*dst, m)) {
-        wcn_mat4_set_row(dst, 3, row3);
-    }
+    // Copy the fourth row (translation part). Unconditional: m is by value, the
+    // original's `m !== newDst` reference guard is always true here, and the
+    // value comparison read dst mid-write (LOGIC_BUGS.md L-11 family).
+    wcn_mat4_set_row(dst, 3, row3);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - process first three rows with SIMD
-    __m128 vec_s = __lsx_vreplgr2vr_s(s);
+    __m128 vec_s = wcn_lsx_splat_f(s);
     __m128 row0 = wcn_mat4_get_row(&m, 0);
     __m128 row1 = wcn_mat4_get_row(&m, 1);
     __m128 row2 = wcn_mat4_get_row(&m, 2);
@@ -7809,10 +7885,10 @@ void WMATH_CALL(Mat4, uniform_scale)(DST_MAT4, WMATH_TYPE(Mat4) m, float s) {
     wcn_mat4_set_row(dst, 1, scaled_row1);
     wcn_mat4_set_row(dst, 2, scaled_row2);
 
-    // Copy the fourth row (translation part) unchanged if matrices are different
-    if (!WMATH_EQUALS(Mat4)(*dst, m)) {
-        wcn_mat4_set_row(dst, 3, row3);
-    }
+    // Copy the fourth row (translation part). Unconditional: m is by value, the
+    // original's `m !== newDst` reference guard is always true here, and the
+    // value comparison read dst mid-write (LOGIC_BUGS.md L-11 family).
+    wcn_mat4_set_row(dst, 3, row3);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
     // WebAssembly SIMD implementation - process first three rows with SIMD
@@ -7832,9 +7908,19 @@ void WMATH_CALL(Mat4, uniform_scale)(DST_MAT4, WMATH_TYPE(Mat4) m, float s) {
     wcn_mat4_set_row(dst, 1, scaled_row1);
     wcn_mat4_set_row(dst, 2, scaled_row2);
 
-    // Copy the fourth row (translation part) unchanged if matrices are different
-    if (!WMATH_EQUALS(Mat4)(*dst, m)) {
-        wcn_mat4_set_row(dst, 3, row3);
+    // Copy the fourth row (translation part). Unconditional: m is by value, the
+    // original's `m !== newDst` reference guard is always true here, and the
+    // value comparison read dst mid-write (LOGIC_BUGS.md L-11 family).
+    wcn_mat4_set_row(dst, 3, row3);
+
+#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
+    {
+        /* Constructs the matrix; no input matrix here. Diagonal s with m15 = 1. */
+        const size_t vl = __riscv_vsetvl_e32m1(4);
+        __riscv_vse32_v_f32m1(&dst->m[0], wcn_rvv_make4_f(s, 0.0f, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[4], wcn_rvv_make4_f(0.0f, s, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[8], wcn_rvv_make4_f(0.0f, 0.0f, s, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[12], wcn_rvv_make4_f(0.0f, 0.0f, 0.0f, 1.0f), vl);
     }
 
 #else
@@ -7852,12 +7938,12 @@ void WMATH_CALL(Mat4, uniform_scale)(DST_MAT4, WMATH_TYPE(Mat4) m, float s) {
     dst->m[10] = s * m.m[2 * 4 + 2];
     dst->m[11] = s * m.m[2 * 4 + 3];
 
-    if (!WMATH_EQUALS(Mat4)(*dst, m)) {
-        dst->m[12] = m.m[12];
-        dst->m[13] = m.m[13];
-        dst->m[14] = m.m[14];
-        dst->m[15] = m.m[15];
-    }
+    // Copy the fourth row. Unconditional (see the SIMD branch notes): the
+    // guard read dst->m[12..15], which this branch has not written yet.
+    dst->m[12] = m.m[12];
+    dst->m[13] = m.m[13];
+    dst->m[14] = m.m[14];
+    dst->m[15] = m.m[15];
 #endif
 }
 
@@ -7870,33 +7956,19 @@ void WMATH_CALL(Mat4, uniform_scale)(DST_MAT4, WMATH_TYPE(Mat4) m, float s) {
 void WMATH_CALL(Mat4, uniform_scaling)(DST_MAT4, float s) {
 
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-    // SSE implementation - create uniform scaling matrix efficiently
-    __m128 vec_s = _mm_set1_ps(s);
-    __m128 vec_zero = _mm_setzero_ps();
-    __m128 vec_one = _mm_set1_ps(1.0f);
+    // SSE implementation: diag(s,s,s,1). Same move_ss/shuffle lane mix-up as
+    // WMATH_CALL(Mat3, uniform_scaling); constant rows fold into movaps.
+    const __m128 vec_s = _mm_set1_ps(s);
+    const __m128 m0 = _mm_castsi128_ps(_mm_setr_epi32(-1, 0, 0, 0));
+    const __m128 m1 = _mm_castsi128_ps(_mm_setr_epi32(0, -1, 0, 0));
+    const __m128 m2 = _mm_castsi128_ps(_mm_setr_epi32(0, 0, -1, 0));
+    const __m128 m3 = _mm_castsi128_ps(_mm_setr_epi32(0, 0, 0, -1));
 
-    // Create diagonal matrix with s on diagonal
-    // Row0: [s, 0, 0, 0]
-    __m128 row0 = _mm_move_ss(vec_s, vec_zero);
-    row0 = _mm_shuffle_ps(row0, vec_zero, _MM_SHUFFLE(0, 0, 2, 0));
-
-    // Row1: [0, s, 0, 0]
-    __m128 row1 = _mm_move_ss(vec_zero, vec_s);
-    row1 = _mm_shuffle_ps(row1, vec_zero, _MM_SHUFFLE(0, 2, 0, 1));
-
-    // Row2: [0, 0, s, 0]
-    __m128 row2 = _mm_move_ss(vec_zero, vec_s);
-    row2 = _mm_shuffle_ps(row2, vec_zero, _MM_SHUFFLE(0, 2, 1, 0));
-
-    // Row3: [0, 0, 0, 1]
-    __m128 row3 = _mm_move_ss(vec_zero, vec_one);
-    row3 = _mm_shuffle_ps(row3, vec_zero, _MM_SHUFFLE(0, 2, 1, 0));
-
-    // Store results
-    _mm_storeu_ps(&dst->m[0], row0);
-    _mm_storeu_ps(&dst->m[4], row1);
-    _mm_storeu_ps(&dst->m[8], row2);
-    _mm_storeu_ps(&dst->m[12], row3);
+    // Store results -- mask the broadcast scalar into each diagonal slot
+    _mm_storeu_ps(&dst->m[0], _mm_and_ps(vec_s, m0));
+    _mm_storeu_ps(&dst->m[4], _mm_and_ps(vec_s, m1));
+    _mm_storeu_ps(&dst->m[8], _mm_and_ps(vec_s, m2));
+    _mm_storeu_ps(&dst->m[12], m3);  // [0,0,0,1]
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
     // NEON implementation - create uniform scaling matrix efficiently
@@ -7954,9 +8026,9 @@ void WMATH_CALL(Mat4, uniform_scaling)(DST_MAT4, float s) {
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
     // LoongArch LSX implementation - create uniform scaling matrix efficiently
-    __m128 vec_s = __lsx_vreplgr2vr_s(s);
+    __m128 vec_s = wcn_lsx_splat_f(s);
     __m128 vec_zero = __lsx_vldi(0);  // Load immediate zero
-    __m128 vec_one = __lsx_vreplgr2vr_s(1.0f);
+    __m128 vec_one = wcn_lsx_splat_f(1.0f);
 
     // Create diagonal matrix using direct element assignment
     dst->m[0] = s;
@@ -7989,6 +8061,16 @@ void WMATH_CALL(Mat4, uniform_scaling)(DST_MAT4, float s) {
     wasm_v128_store(&dst->m[8], col2);
     wasm_v128_store(&dst->m[12], col3);
 
+#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
+    {
+        /* Constructs the matrix; this function receives no input matrix. */
+        const size_t vl = __riscv_vsetvl_e32m1(4);
+        __riscv_vse32_v_f32m1(&dst->m[0], wcn_rvv_make4_f(s, 0.0f, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[4], wcn_rvv_make4_f(0.0f, s, 0.0f, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[8], wcn_rvv_make4_f(0.0f, 0.0f, s, 0.0f), vl);
+        __riscv_vse32_v_f32m1(&dst->m[12], wcn_rvv_make4_f(0.0f, 0.0f, 0.0f, 1.0f), vl);
+    }
+
 #else
     // Scalar fallback - direct assignment is more efficient than memset
     memset(dst, 0, sizeof(WMATH_TYPE(Mat4)));
@@ -8009,13 +8091,25 @@ void WMATH_CALL(Mat4, ortho)(DST_MAT4, const float left, const float right, cons
     const float t_b = top - bottom;
     const float f_n = far - near;
 
-    float tx = -(right + left) / r_l;
-    float ty = -(top + bottom) / t_b;
-    float tz = -(far + near) / f_n;
-
+    // [0]
     float m00 = 2.0f / r_l;
+    // [5]
     float m11 = 2.0f / t_b;
-    float m22 = -2.0f / f_n;
+    // [10]
+    // WebGPU normalised depth is [0, 1], so the z scale is -1/(far-near).
+    // This was -2/(far-near), which is the OpenGL [-1, 1] convention and left
+    // the library inconsistent with its own perspective()/frustum(), both of
+    // which (correctly) target [0, 1].
+    float m22 = -1.0f / f_n;
+    
+    // [12]
+    float tx = -(right + left) / r_l;
+    // [13]
+    float ty = -(top + bottom) / t_b;
+    // [14]
+    // z = -near must map to 0, so the offset is -near/(far-near).
+    // This was -(far+near)/(far-near), the OpenGL [-1, 1] offset.
+    float tz = -near / f_n;
 
     // 矩阵内存布局 (Column-Major):
     // Col 0: [m00, 0, 0, 0]
@@ -8069,7 +8163,7 @@ void WMATH_CALL(Mat4, ortho)(DST_MAT4, const float left, const float right, cons
     float data[16] = {m00,  0.0f, 0.0f, 0.0f, 0.0f, m11, 0.0f, 0.0f,
                       0.0f, 0.0f, m22,  0.0f, tx,   ty,  tz,   1.0f};
 
-    size_t vl = __riscv_vsetvli(16, __RISCV_VTYPE_F32, __RISCV_VLMUL_1);
+    size_t vl = __riscv_vsetvl_e32m1(16);
     vfloat32m1_t vec_all = __riscv_vle32_v_f32m1(data, vl);
     __riscv_vse32_v_f32m1(dst->m, vec_all, vl);
 

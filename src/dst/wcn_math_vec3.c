@@ -1,3 +1,39 @@
+/*
+ * ISA width policy for this file (see SIMD_PERF_BUGS.md, "ISA width measurement")
+ * ---------------------------------------------------------------------------
+ * Vec3 kernels: three floats of live data, one lane short of SSE.
+ *
+ * AVX-512 is still the first choice for a build, for a different reason than width:
+ * with AVX512VL the architectural XMM count doubles from 16 to 32 and mask
+ * registers appear, so this same 128-bit code compiles with far fewer spills.
+ * Measured over the whole library at /arch:AVX2 vs /arch:AVX512:
+ *     instructions -3.9% overall (mat3 -7.8%, mat4 -6.4%, other -4.9%),
+ *     stack accesses 828 -> 708 (-14%),
+ *     wcn_math_Mat4_inverse 107 ins / 22 stack -> 80 ins / 4 stack.
+ * That is why the ladder AVX512 > AVX2 > FMA+SSE > SSE is realised as build
+ * variants (tools/build_libs_avx512.bat, CMake WCN_MATH_ENABLE_AVX512) rather than
+ * as additional #if branches in this file: there is no 128-bit-to-512-bit rewrite
+ * to write, only a better register budget.
+ *
+ * The functions here branch on WCN_HAS_X86_64 / AARCH64 / WASM_SIMD /
+ * RISCV_VECTOR / LOONGARCH_LSX and use 128-bit vectors in every case. That is a
+ * measured decision, not an omission.
+ *
+ * A single Vec/Mat/Quat operation carries four floats of live data, which is one
+ * 128-bit register. Measured on this machine:
+ *
+ *     4-float op        SSE 0.800 ns   AVX(256) 0.750 ns   -6% (in the noise)
+ *     RGBA->SoA (N px)  SSE 0.51 ns/px AVX2     0.33 ns/px  1.55x
+ *
+ * The 256-bit form only pays when the work grows with input size, which happens in
+ * the image conversion loops and nowhere here. Widening these functions would also
+ * add a vzeroupper transition at every call boundary and pull the core onto the
+ * AVX frequency curve for no arithmetic gain.
+ *
+ * Functions whose scalar bodies are deliberate (no SIMD branch at all) carry their
+ * own reason next to the body.
+ */
+
 #include "../common/wcn_math_internal.h"
 #include "WCN/WCN_MATH_DST.h"
 
@@ -74,11 +110,9 @@ WMATH_CEIL(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) a) {
   v128_t vec_res = wasm_f32x4_ceil(vec_a);
   wcn_store_vec3_partial(dst->v, vec_res);
 
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation
-  vfloat32m1_t vec_a = __riscv_vle32_v_f32m1(a.v, 3);
-  vfloat32m1_t vec_res = __riscv_vfroundto_f_v_f32m1(vec_a, 0);  // Round towards +inf
-  __riscv_vse32_v_f32m1(dst->v, vec_res, 3);
+/* No RVV arm here on purpose: the base vector extension has no float->float rounding
+   instruction (vfcvt goes via integers, which is wrong for |x| >= 2^31), and
+   __riscv_vfroundto_f_v_f32m1 does not exist. RVV falls through to the scalar path below. */
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
   // LoongArch LSX implementation using __lsx_vfrintrp_s (Round to Plus Infinity)
@@ -136,11 +170,9 @@ WMATH_FLOOR(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) a) {
   v128_t vec_res = wasm_f32x4_floor(vec_a);
   wcn_store_vec3_partial(dst->v, vec_res);
 
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation
-  vfloat32m1_t vec_a = __riscv_vle32_v_f32m1(a.v, 3);
-  vfloat32m1_t vec_res = __riscv_vfroundto_f_v_f32m1(vec_a, 1);  // Round towards -inf (floor)
-  __riscv_vse32_v_f32m1(dst->v, vec_res, 3);
+/* No RVV arm here on purpose: the base vector extension has no float->float rounding
+   instruction (vfcvt goes via integers, which is wrong for |x| >= 2^31), and
+   __riscv_vfroundto_f_v_f32m1 does not exist. RVV falls through to the scalar path below. */
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
   // LoongArch LSX implementation using __lsx_vfrintrm_s (Round to Minus Infinity)
@@ -160,54 +192,52 @@ WMATH_FLOOR(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) a) {
 // round
 void
 WMATH_ROUND(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) a) {
-
+  // Math.round semantics (halves toward +infinity), same contract as
+  // WMATH_ROUND(Vec2): floor(x + 0.5) matches the original everywhere,
+  // where roundf/vrndnq/_mm_round_ps/wasm_f32x4_nearest all differ on ties.
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-// SSE implementation using SSE4.1 _mm_round_ps if available, otherwise manual
+// SSE implementation
 #ifdef __SSE4_1__
   __m128 vec_a = wcn_load_vec3_partial(a.v);
-  // Round to nearest integer (banker's rounding)
-  __m128 vec_res =
-      _mm_round_ps(vec_a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+  __m128 vec_res = _mm_floor_ps(_mm_add_ps(vec_a, _mm_set1_ps(0.5f)));
   wcn_store_vec3_partial(dst->v, vec_res);
 #else
   // Fallback for older SSE versions
-  dst->v[0] = roundf(a.v[0]);
-  dst->v[1] = roundf(a.v[1]);
-  dst->v[2] = roundf(a.v[2]);
+  dst->v[0] = floorf(a.v[0] + 0.5f);
+  dst->v[1] = floorf(a.v[1] + 0.5f);
+  dst->v[2] = floorf(a.v[2] + 0.5f);
 #endif
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation using vrndnq_f32 (round to nearest)
+  // NEON implementation: vrndmq_f32 is floor
   float32x4_t vec_a = {a.v[0], a.v[1], a.v[2], 0.0f};
-  float32x4_t vec_res = vrndnq_f32(vec_a);
+  float32x4_t vec_res = vrndmq_f32(vaddq_f32(vec_a, vdupq_n_f32(0.5f)));
 
   dst->v[0] = vgetq_lane_f32(vec_res, 0);
   dst->v[1] = vgetq_lane_f32(vec_res, 1);
   dst->v[2] = vgetq_lane_f32(vec_res, 2);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WASM SIMD implementation using wasm_f32x4_nearest (round to nearest, ties to even)
+  // WASM SIMD: floor(x + 0.5); nearest() is ties-to-even, not Math.round
   v128_t vec_a = wcn_load_vec3_partial(a.v);
-  v128_t vec_res = wasm_f32x4_nearest(vec_a);
+  v128_t vec_res = wasm_f32x4_floor(wasm_f32x4_add(vec_a, wasm_f32x4_splat(0.5f)));
   wcn_store_vec3_partial(dst->v, vec_res);
 
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation
-  vfloat32m1_t vec_a = __riscv_vle32_v_f32m1(a.v, 3);
-  vfloat32m1_t vec_res = __riscv_vfroundto_f_v_f32m1(vec_a, 2);  // Round to nearest
-  __riscv_vse32_v_f32m1(dst->v, vec_res, 3);
+/* No RVV arm here on purpose: the base vector extension has no float->float rounding
+   instruction (vfcvt goes via integers, which is wrong for |x| >= 2^31), and
+   __riscv_vfroundto_f_v_f32m1 does not exist. RVV falls through to the scalar path below. */
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation using __lsx_vfrintrne_s (Round to Nearest Even)
+  // LoongArch LSX: vfrintrm is floor
   __m128 vec_a = __lsx_vld(a.v, 0);
-  __m128 vec_res = __lsx_vfrintrne_s(vec_a);
+  __m128 vec_res = __lsx_vfrintrm_s(__lsx_vfadd_s(vec_a, __lsx_vreplgr2vr_w(0x3F000000)));
   __lsx_vst(vec_res, dst->v, 0);
 
 #else
   // Scalar fallback
-  dst->v[0] = roundf(a.v[0]);
-  dst->v[1] = roundf(a.v[1]);
-  dst->v[2] = roundf(a.v[2]);
+  dst->v[0] = floorf(a.v[0] + 0.5f);
+  dst->v[1] = floorf(a.v[1] + 0.5f);
+  dst->v[2] = floorf(a.v[2] + 0.5f);
 #endif
 }
 
@@ -248,7 +278,7 @@ float WMATH_DOT(Vec3)(const WMATH_TYPE(Vec3) a, const WMATH_TYPE(Vec3) b) {
   vfloat32m1_t vec_a = __riscv_vle32_v_f32m1(a.v, 3);
   vfloat32m1_t vec_b = __riscv_vle32_v_f32m1(b.v, 3);
   vfloat32m1_t vec_mul = __riscv_vfmul_vv_f32m1(vec_a, vec_b, 3);
-  return __riscv_vfredusum_vs_f32m1_f32(vec_mul, __riscv_vfmv_v_f_f32m1(0.0f, 3), 3);
+  return wcn_hadd_f32(vec_mul);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
   // LoongArch LSX implementation - multiply and horizontal add
@@ -325,12 +355,12 @@ WMATH_CROSS(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) a, const WMATH_TYPE(Vec3) b) 
 
   // Cross product: (a2*b3 - a3*b2, a3*b1 - a1*b3, a1*b2 - a2*b1)
   // Extract components
-  float a0 = __riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(va, 0));
-  float a1 = __riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(va, 1));
-  float a2 = __riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(va, 2));
-  float b0 = __riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(vb, 0));
-  float b1 = __riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(vb, 1));
-  float b2 = __riscv_vfmv_f_s_f32m1(__riscv_vget_v_f32m1x4(vb, 2));
+  float a0 = wcn_rvv_lane4(va, 0);
+  float a1 = wcn_rvv_lane4(va, 1);
+  float a2 = wcn_rvv_lane4(va, 2);
+  float b0 = wcn_rvv_lane4(vb, 0);
+  float b1 = wcn_rvv_lane4(vb, 1);
+  float b2 = wcn_rvv_lane4(vb, 2);
 
   dst->v[0] = a1 * b2 - a2 * b1;
   dst->v[1] = a2 * b0 - a0 * b2;
@@ -342,12 +372,12 @@ WMATH_CROSS(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) a, const WMATH_TYPE(Vec3) b) 
   __m128 vec_b = __lsx_vld(b.v, 0);
 
   // Extract components
-  float a0 = __lsx_vfrep2vr_w(vec_a)[0];
-  float a1 = __lsx_vfrep2vr_w(vec_a)[1];
-  float a2 = __lsx_vfrep2vr_w(vec_a)[2];
-  float b0 = __lsx_vfrep2vr_w(vec_b)[0];
-  float b1 = __lsx_vfrep2vr_w(vec_b)[1];
-  float b2 = __lsx_vfrep2vr_w(vec_b)[2];
+  float a0 = wcn_lsx_extract_f(vec_a, 0);
+  float a1 = wcn_lsx_extract_f(vec_a, 1);
+  float a2 = wcn_lsx_extract_f(vec_a, 2);
+  float b0 = wcn_lsx_extract_f(vec_b, 0);
+  float b1 = wcn_lsx_extract_f(vec_b, 1);
+  float b2 = wcn_lsx_extract_f(vec_b, 2);
 
   dst->v[0] = a1 * b2 - a2 * b1;
   dst->v[1] = a2 * b0 - a0 * b2;
@@ -378,17 +408,16 @@ WMATH_NORMALIZE(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) v) {
   const float epsilon = wcn_math_get_epsilon();
 
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // Optimized SSE implementation using standard inverse square root for better precision
-  __m128 vec_v = wcn_load_vec3_partial(v.v);
-  __m128 vec_squared = _mm_mul_ps(vec_v, vec_v);
-  float len_sq = _mm_cvtss_f32(wcn_hadd_ps(vec_squared));
-
+  // Scalar deliberately on x86 (SIMD_PERF_BUGS.md PS-07, measured 1.7x):
+  // the packed chain pays partial load/store helpers plus hadd; MSVC emits
+  // good SSE2 scalar code for this form anyway. Same shape as the other
+  // backends' branches here (inv_len = 1/sqrt(len_sq), then componentwise).
+  const float len_sq = v.v[0] * v.v[0] + v.v[1] * v.v[1] + v.v[2] * v.v[2];
   if (len_sq > epsilon * epsilon) {
-    const __m128 vec_len_sq = _mm_set1_ps(len_sq);
-    // Use standard sqrt for better precision
-    const __m128 inv_len = _mm_div_ps(_mm_set1_ps(1.0f), _mm_sqrt_ps(vec_len_sq));
-    __m128 vec_res = _mm_mul_ps(vec_v, inv_len);
-    wcn_store_vec3_partial(dst->v, vec_res);
+    const float inv_len = 1.0f / sqrtf(len_sq);
+    dst->v[0] = v.v[0] * inv_len;
+    dst->v[1] = v.v[1] * inv_len;
+    dst->v[2] = v.v[2] * inv_len;
   } else {
     WMATH_ZERO(Vec3)(dst);
   }
@@ -429,7 +458,7 @@ WMATH_NORMALIZE(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) v) {
   // RISC-V Vector Extension implementation
   vfloat32m1_t vec_v = __riscv_vle32_v_f32m1(v.v, 3);
   vfloat32m1_t vec_squared = __riscv_vfmul_vv_f32m1(vec_v, vec_v, 3);
-  float len_sq = __riscv_vfredusum_vs_f32m1_f32(vec_squared, __riscv_vfmv_v_f_f32m1(0.0f, 3), 3);
+  float len_sq = wcn_hadd_f32(vec_squared);
 
   if (len_sq > epsilon * epsilon) {
     float inv_len = 1.0f / sqrtf(len_sq);
@@ -706,10 +735,19 @@ void WMATH_SUB(Vec3)(DST_VEC3, WMATH_TYPE(Vec3) a, WMATH_TYPE(Vec3) b) {
 
 // angle
 float WMATH_ANGLE(Vec3)(const WMATH_TYPE(Vec3) a, const WMATH_TYPE(Vec3) b) {
+  /* Scalar on every backend, structurally: this function is two length
+   * reductions and one dot product, each of which is itself a scalar reduction
+   * over three lanes. Widening the wrapper would only add load/shuffle work
+   * around calls that are scalar by measurement (see Vec3_dot/Vec3_length).
+   * The vector work, where it exists, already happens inside those callees. */
   const float mag_1 = WMATH_LENGTH(Vec3)(a);
   const float mag_2 = WMATH_LENGTH(Vec3)(b);
   const float mag = mag_1 * mag_2;
-  const float cosine = mag && WMATH_DOT(Vec3)(a, b) / mag;
+  // `mag && dot / mag` is the JavaScript idiom: in JS `&&` YIELDS a value, so
+  // the original reads "dot/mag, or 0 when mag is 0". In C `&&` is a logical
+  // operator that yields 0 or 1, so the straight port returned 0 (or 1) for
+  // every non-degenerate pair. Only a zero magnitude needs guarding.
+  const float cosine = (mag != 0.0f) ? (WMATH_DOT(Vec3)(a, b) / mag) : 0.0f;
   return acosf(cosine);
 }
 
@@ -733,20 +771,13 @@ WMATH_LERP(Vec3)(DST_VEC3,
                  float t)
 {
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation
-  __m128 vec_a = _mm_loadu_ps(&a.v[0]);
-  __m128 vec_b = _mm_loadu_ps(&b.v[0]);
-  __m128 vec_t = _mm_set1_ps(t);
-  __m128 vec_diff = _mm_sub_ps(vec_b, vec_a);
-
-  // Use FMA if available: a + (b - a) * t
-#if defined(WCN_HAS_FMA)
-  __m128 vec_res = wcn_fma_mul_add_ps(vec_diff, vec_t, vec_a);
-#else
-  __m128 vec_res = _mm_add_ps(vec_a, _mm_mul_ps(vec_diff, vec_t));
-#endif
-
-  wcn_store_vec3_partial(dst->v, vec_res);
+  // Scalar on purpose: the hand-written SSE path (16-byte over-reads of the
+  // 12-byte structs + partial stores) measured 4.5x slower than this form,
+  // and MSVC auto-vectorizes three independent FMAs on its own.
+  // See SIMD_PERF_BUGS.md PS-07.
+  dst->v[0] = a.v[0] + (b.v[0] - a.v[0]) * t;
+  dst->v[1] = a.v[1] + (b.v[1] - a.v[1]) * t;
+  dst->v[2] = a.v[2] + (b.v[2] - a.v[2]) * t;
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
   // NEON implementation
@@ -754,7 +785,7 @@ WMATH_LERP(Vec3)(DST_VEC3,
   float32x4_t vec_b = {b.v[0], b.v[1], b.v[2], 0.0f};
   float32x4_t vec_t = vdupq_n_f32(t);
   float32x4_t vec_diff = vsubq_f32(vec_b, vec_a);
-  float32x4_t vec_res = vaddq_f32(vec_a, vmulq_f32(vec_diff, vec_t));
+  float32x4_t vec_res = vfmaq_f32(vec_a, vec_diff, vec_t);
 
   dst->v[0] = vgetq_lane_f32(vec_res, 0);
   dst->v[1] = vgetq_lane_f32(vec_res, 1);
@@ -804,14 +835,11 @@ WMATH_LERP_V(Vec3)(DST_VEC3,
 {
 
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation
-  __m128 vec_a = _mm_loadu_ps(&a.v[0]);
-  __m128 vec_b = _mm_loadu_ps(&b.v[0]);
-  __m128 vec_t = _mm_loadu_ps(&t.v[0]);
-  __m128 vec_diff = _mm_sub_ps(vec_b, vec_a);
-  __m128 vec_res = _mm_add_ps(vec_a, _mm_mul_ps(vec_diff, vec_t));
-
-  wcn_store_vec3_partial(dst->v, vec_res);
+  // Scalar on purpose (see WMATH_LERP(Vec3)): the hand SSE path measured
+  // ~4.7x slower than this.
+  dst->v[0] = a.v[0] + (b.v[0] - a.v[0]) * t.v[0];
+  dst->v[1] = a.v[1] + (b.v[1] - a.v[1]) * t.v[1];
+  dst->v[2] = a.v[2] + (b.v[2] - a.v[2]) * t.v[2];
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
   // NEON implementation
@@ -819,7 +847,7 @@ WMATH_LERP_V(Vec3)(DST_VEC3,
   float32x4_t vec_b = {b.v[0], b.v[1], b.v[2], 0.0f};
   float32x4_t vec_t = {t.v[0], t.v[1], t.v[2], 0.0f};
   float32x4_t vec_diff = vsubq_f32(vec_b, vec_a);
-  float32x4_t vec_res = vaddq_f32(vec_a, vmulq_f32(vec_diff, vec_t));
+  float32x4_t vec_res = vfmaq_f32(vec_a, vec_diff, vec_t);
 
   dst->v[0] = vgetq_lane_f32(vec_res, 0);
   dst->v[1] = vgetq_lane_f32(vec_res, 1);
@@ -1110,62 +1138,24 @@ void
 WMATH_DIV_SCALAR(Vec3)(DST_VEC3,
                        const WMATH_TYPE(Vec3) a,
                        const float scalar) {
+  /* Scalar on every backend, by measurement: one divide per lane over three
+   * lanes. The packed form has to build a 4-lane vector from 12 bytes and store
+   * 12 back through partial store helpers, which measured 1.7x slower than this
+   * (SIMD_PERF_BUGS.md PS-07). Division has no cheap packed analogue at this
+   * width on the SSE2 baseline. */
   if (scalar == 0) {
     WMATH_ZERO(Vec3)(dst);
     return;
   }
 
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation
-  __m128 vec_a = _mm_loadu_ps(&a.v[0]);
-  __m128 vec_scalar = _mm_set1_ps(scalar);
-  __m128 vec_res = _mm_div_ps(vec_a, vec_scalar);
-
-  // Extract results using array access
-  float temp[4];
-  _mm_storeu_ps(temp, vec_res);
-  dst->v[0] = temp[0];
-  dst->v[1] = temp[1];
-  dst->v[2] = temp[2];
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation
-  float32x4_t vec_a = {a.v[0], a.v[1], a.v[2], 0.0f};
-  float32x4_t vec_scalar = vdupq_n_f32(scalar);
-  float32x4_t vec_res = vdivq_f32(vec_a, vec_scalar);
-
-  dst->v[0] = vgetq_lane_f32(vec_res, 0);
-  dst->v[1] = vgetq_lane_f32(vec_res, 1);
-  dst->v[2] = vgetq_lane_f32(vec_res, 2);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t vec_a = wcn_load_vec3_partial(a.v);
-  v128_t vec_scalar = wasm_f32x4_splat(scalar);
-  v128_t vec_res = wasm_f32x4_div(vec_a, vec_scalar);
-  wcn_store_vec3_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation
-  vfloat32m1_t vec_a = wcn_load_vec3_partial(a.v);
-  vfloat32m1_t vec_scalar = __riscv_vfmv_v_f_f32m1(scalar, 4);
-  vfloat32m1_t vec_res = __riscv_vfdiv_vv_f32m1(vec_a, vec_scalar, 4);
-  wcn_store_vec3_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation
-  __m128 vec_a = wcn_load_vec3_partial(a.v);
-  __m128 vec_scalar = __lsx_vldrepl_w(&scalar, 0);
-  __m128 vec_res = __lsx_vfdiv_s(vec_a, vec_scalar);
-  wcn_store_vec3_partial(dst->v, vec_res);
-
-#else
-  // Scalar fallback
+  // Measured on MSVC x64: the hand-written SSE path was ~6.7x slower than
+  // this plain scalar form (SIMD_PERF_BUGS.md PS-07). The compiler
+  // auto-vectorizes three independent divisions on its own, without the
+  // 16-byte over-read of the 12-byte struct and the partial-load/store
+  // shuffles the hand path needed, so scalar is the fastest correct choice.
   dst->v[0] = a.v[0] / scalar;
   dst->v[1] = a.v[1] / scalar;
   dst->v[2] = a.v[2] / scalar;
-#endif
-
 }
 
 // inverse
@@ -1254,7 +1244,7 @@ float WMATH_DISTANCE(Vec3)(const WMATH_TYPE(Vec3) a, const WMATH_TYPE(Vec3) b) {
   vfloat32m1_t vb = wcn_load_vec3_partial(b.v);
   vfloat32m1_t diff = __riscv_vfsub_vv_f32m1(va, vb, 4);
   vfloat32m1_t mul = __riscv_vfmul_vv_f32m1(diff, diff, 4);
-  float sum = __riscv_vfredusum_vs_f32m1_f32(mul, __riscv_vfmv_v_f_f32m1(0.0f, 4), 4);
+  float sum = wcn_hadd_f32(mul);
   return sqrtf(sum);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
@@ -1267,7 +1257,7 @@ float WMATH_DISTANCE(Vec3)(const WMATH_TYPE(Vec3) a, const WMATH_TYPE(Vec3) b) {
   // Horizontal add to get sum
   __m128 high = __lsx_vshuf4i_w(mul, 0x1B);  // 0x1B = 0b00011011 = (2, 3, 0, 1)
   __m128 sum = __lsx_vfadd_s(mul, high);
-  return sqrtf(__lsx_vfrep2vr_w(sum)[0]);
+  return sqrtf(wcn_lsx_extract_f(sum, 0));
 
 #else
   float dx = a.v[0] - b.v[0];
@@ -1312,7 +1302,7 @@ float WMATH_DISTANCE_SQ(Vec3)(const WMATH_TYPE(Vec3) a, const WMATH_TYPE(Vec3) b
   vfloat32m1_t vb = wcn_load_vec3_partial(b.v);
   vfloat32m1_t diff = __riscv_vfsub_vv_f32m1(va, vb, 4);
   vfloat32m1_t mul = __riscv_vfmul_vv_f32m1(diff, diff, 4);
-  return __riscv_vfredusum_vs_f32m1_f32(mul, __riscv_vfmv_v_f_f32m1(0.0f, 4), 4);
+  return wcn_hadd_f32(mul);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
   // LoongArch LSX implementation
@@ -1324,7 +1314,7 @@ float WMATH_DISTANCE_SQ(Vec3)(const WMATH_TYPE(Vec3) a, const WMATH_TYPE(Vec3) b
   // Horizontal add to get sum
   __m128 high = __lsx_vshuf4i_w(mul, 0x1B);  // 0x1B = 0b00011011 = (2, 3, 0, 1)
   __m128 sum = __lsx_vfadd_s(mul, high);
-  return __lsx_vfrep2vr_w(sum)[0];
+  return wcn_lsx_extract_f(sum, 0);
 
 #else
   float dx = a.v[0] - b.v[0];
@@ -1369,7 +1359,7 @@ WMATH_NEGATE(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) a) {
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
   // LoongArch LSX implementation - negate using XOR with sign bit mask
   __m128 vec_a = wcn_load_vec3_partial(a.v);
-  __m128 sign_mask = __lsx_vldrepl_w(&(-0.0f), 0); // Load -0.0f into all lanes
+  __m128 sign_mask = wcn_lsx_splat_f(-0.0f); // Load -0.0f into all lanes
   __m128 vec_res = __lsx_vxor_v(vec_a, sign_mask);
   wcn_store_vec3_partial(dst->v, vec_res);
 
@@ -1403,10 +1393,13 @@ WMATH_SET_LENGTH(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) v, const float length) {
 // truncate
 void
 WMATH_TRUNCATE(Vec3)(DST_VEC3, const WMATH_TYPE(Vec3) v, const float max_length) {
+  // See WMATH_TRUNCATE(Vec2): the copy must not run after the truncating
+  // branch, or truncate() becomes a plain copy for every input.
   if (WMATH_LENGTH(Vec3)(v) > max_length) {
     WMATH_SET_LENGTH(Vec3)(dst, v, max_length);
+  } else {
+    WMATH_COPY(Vec3)(dst, v);
   }
-  WMATH_COPY(Vec3)(dst, v);
 }
 
 // midpoint

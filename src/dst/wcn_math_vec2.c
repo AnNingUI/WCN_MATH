@@ -1,3 +1,39 @@
+/*
+ * ISA width policy for this file (see SIMD_PERF_BUGS.md, "ISA width measurement")
+ * ---------------------------------------------------------------------------
+ * Vec2 kernels: two floats of live data, below the SSE lane count.
+ *
+ * AVX-512 is still the first choice for a build, for a different reason than width:
+ * with AVX512VL the architectural XMM count doubles from 16 to 32 and mask
+ * registers appear, so this same 128-bit code compiles with far fewer spills.
+ * Measured over the whole library at /arch:AVX2 vs /arch:AVX512:
+ *     instructions -3.9% overall (mat3 -7.8%, mat4 -6.4%, other -4.9%),
+ *     stack accesses 828 -> 708 (-14%),
+ *     wcn_math_Mat4_inverse 107 ins / 22 stack -> 80 ins / 4 stack.
+ * That is why the ladder AVX512 > AVX2 > FMA+SSE > SSE is realised as build
+ * variants (tools/build_libs_avx512.bat, CMake WCN_MATH_ENABLE_AVX512) rather than
+ * as additional #if branches in this file: there is no 128-bit-to-512-bit rewrite
+ * to write, only a better register budget.
+ *
+ * The functions here branch on WCN_HAS_X86_64 / AARCH64 / WASM_SIMD /
+ * RISCV_VECTOR / LOONGARCH_LSX and use 128-bit vectors in every case. That is a
+ * measured decision, not an omission.
+ *
+ * A single Vec/Mat/Quat operation carries four floats of live data, which is one
+ * 128-bit register. Measured on this machine:
+ *
+ *     4-float op        SSE 0.800 ns   AVX(256) 0.750 ns   -6% (in the noise)
+ *     RGBA->SoA (N px)  SSE 0.51 ns/px AVX2     0.33 ns/px  1.55x
+ *
+ * The 256-bit form only pays when the work grows with input size, which happens in
+ * the image conversion loops and nowhere here. Widening these functions would also
+ * add a vzeroupper transition at every call boundary and pull the core onto the
+ * AVX frequency curve for no arithmetic gain.
+ *
+ * Functions whose scalar bodies are deliberate (no SIMD branch at all) carry their
+ * own reason next to the body.
+ */
+
 #include "../common/wcn_math_internal.h"
 #include "WCN/WCN_MATH_DST.h"
 // BEGIN Vec2
@@ -24,165 +60,49 @@ WMATH_COPY(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) vec2) {
 }
 
 // 0
+// Field writes, not `*dst = (T){...}`: the compound literal makes MSVC build
+// the value in a stack temporary and copy it (PS-01 in SIMD_PERF_BUGS.md).
 void
 WMATH_ZERO(Vec2)(DST_VEC2) {
-  *dst = (WMATH_TYPE(Vec2)){
-      .v = {0.0f, 0.0f},
-  };
+  dst->v[0] = 0.0f;
+  dst->v[1] = 0.0f;
 }
 
 // 1
 void
 WMATH_IDENTITY(Vec2)(DST_VEC2) {
-  *dst = (WMATH_TYPE(Vec2)){
-      .v = {1.0f, 1.0f},
-  };
+  dst->v[0] = 1.0f;
+  dst->v[1] = 1.0f;
 }
 
 // ceil
 void
 WMATH_CEIL(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a) {
-  // WMATH_TYPE(Vec2) vec2;
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation using SSE4.1 _mm_ceil_ps if available
-#ifdef __SSE4_1__
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_res = _mm_ceil_ps(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-#else
-  // Fallback for older SSE versions
-  dst->v[0] = ceilf(a.v[0]);
-  dst->v[1] = ceilf(a.v[1]);
-#endif
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation using vrndpq_f32 (round towards positive infinity)
-  float32x4_t vec_a = wcn_load_vec2_partial(a.v);
-  float32x4_t vec_res = vrndpq_f32(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation for 2 elements
-  vfloat32m1_t vec_a = __riscv_vle32_v_f32m1(a.v, 2);
-  vfloat32m1_t vec_res = __riscv_vfroundto_f_v_f32m1(vec_a, 0);  // Round towards +inf
-  __riscv_vse32_v_f32m1(dst->v, vec_res, 2);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WASM SIMD implementation
-  v128_t vec_a = wcn_load_vec2_partial(a.v);
-  v128_t vec_res = wasm_f32x4_ceil(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX Round to Plus Infinity
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_res = __lsx_vfrintrp_s(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#else
-  // Scalar fallback
-  dst->v[0] = ceilf(a.v[0]);
-  dst->v[1] = ceilf(a.v[1]);
-#endif
+  // Scalar on every backend - see the note on Vec2 length: per-component rounding
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    // Scalar fallback
+    dst->v[0] = ceilf(a.v[0]);
+    dst->v[1] = ceilf(a.v[1]);
 }
 
 // floor
 void
 WMATH_FLOOR(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation using SSE4.1 _mm_floor_ps if available
-  #ifdef __SSE4_1__
-    __m128 vec_a = wcn_load_vec2_partial(a.v);
-    __m128 vec_res = _mm_floor_ps(vec_a);
-    wcn_store_vec2_partial(dst->v, vec_res);
-  #else
-    // Fallback for older SSE versions
-    dst->v[0] = floorf(a.v[0]);
-    dst->v[1] = floorf(a.v[1]);
-  #endif
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation using vrndmq_f32 (round towards negative infinity)
-  float32x4_t vec_a = wcn_load_vec2_partial(a.v);
-  float32x4_t vec_res = vrndmq_f32(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation for 2 elements
-  vfloat32m1_t vec_a = __riscv_vle32_v_f32m1(a.v, 2);
-  vfloat32m1_t vec_res = __riscv_vfroundto_f_v_f32m1(vec_a, 1);  // Round towards -inf (floor)
-  __riscv_vse32_v_f32m1(dst->v, vec_res, 2);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WASM: Direct instruction available
-  v128_t vec_a = wcn_load_vec2_partial(a.v);
-  v128_t vec_res = wasm_f32x4_floor(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX: Round to Minus Infinity
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_res = __lsx_vfrintrm_s(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#else
-  // Scalar fallback
- dst->v[0] = floorf(a.v[0]);
- dst->v[1] = floorf(a.v[1]);
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component rounding
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    // Scalar fallback
+   dst->v[0] = floorf(a.v[0]);
+   dst->v[1] = floorf(a.v[1]);
 }
 
 // round
 void
 WMATH_ROUND(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation using SSE4.1 _mm_round_ps if available, otherwise manual
-#ifdef __SSE4_1__
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  // Round to nearest integer (banker's rounding)
-  __m128 vec_res = _mm_round_ps(vec_a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-  wcn_store_vec2_partial(dst->v, vec_res);
-#else
-  // Fallback for older SSE versions
-  dst->v[0] = roundf(a.v[0]);
-  dst->v[1] = roundf(a.v[1]);
-#endif
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation using vrndnq_f32 (round to nearest)
-  float32x4_t vec_a = wcn_load_vec2_partial(a.v);
-  float32x4_t vec_res = vrndnq_f32(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation for 2 elements
-  vfloat32m1_t vec_a = __riscv_vle32_v_f32m1(a.v, 2);
-  vfloat32m1_t vec_res = __riscv_vfroundto_f_v_f32m1(vec_a, 2);  // Round to nearest
-  __riscv_vse32_v_f32m1(dst->v, vec_res, 2);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WASM Direct instruction available
-  // Uses "Round to Nearest, ties to even" which matches SIMD behavior of x86/Neon
-  v128_t vec_a = wcn_load_vec2_partial(a.v);
-  v128_t vec_res = wasm_f32x4_nearest(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX Round to Nearest Even
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_res = __lsx_vfrintrne_s(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#else
-  // Scalar fallback
-  dst->v[0] = roundf(a.v[0]);
-  dst->v[1] = roundf(a.v[1]);
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component rounding
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    // Scalar fallback
+    dst->v[0] = floorf(a.v[0] + 0.5f);
+    dst->v[1] = floorf(a.v[1] + 0.5f);
 }
 
 // clamp
@@ -211,7 +131,7 @@ WMATH_CLAMP(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const float min_val, const
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
   // RISC-V Vector Extension implementation
-  size_t vl = vsetvl_e32m1(2);
+  size_t vl = __riscv_vsetvl_e32m1(2);
   vfloat32m1_t vec_a = __riscv_vle32_v_f32m1(a.v, vl);
   vfloat32m1_t vec_min = __riscv_vfmv_v_f_f32m1(min_val, vl);
   vfloat32m1_t vec_max = __riscv_vfmv_v_f_f32m1(max_val, vl);
@@ -235,8 +155,8 @@ WMATH_CLAMP(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const float min_val, const
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
   // LoongArch LSX implementation
   __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_min = __lsx_vreplfr2vr_s(min_val);
-  __m128 vec_max = __lsx_vreplfr2vr_s(max_val);
+  __m128 vec_min = wcn_lsx_splat_f(min_val);
+  __m128 vec_max = wcn_lsx_splat_f(max_val);
 
   // Clamp using min/max operations
   __m128 vec_temp = __lsx_vfmax_s(vec_a, vec_min);
@@ -252,199 +172,40 @@ WMATH_CLAMP(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const float min_val, const
 
 // dot
 float WMATH_DOT(Vec2)(const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) {
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 mul = _mm_mul_ps(va, vb);
-  return _mm_cvtss_f32(wcn_hadd_ps(mul));
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  float32x4_t va = wcn_load_vec2_partial(a.v);
-  float32x4_t vb = wcn_load_vec2_partial(b.v);
-  float32x4_t mul = vmulq_f32(va, vb);
-  return wcn_hadd_f32(mul);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation - multiply and reduce add for 2 elements
-  vfloat32m1_t va = __riscv_vle32_v_f32m1(a.v, 2);
-  vfloat32m1_t vb = __riscv_vle32_v_f32m1(b.v, 2);
-  vfloat32m1_t mul = __riscv_vfmul_vv_f32m1(va, vb, 2);
-  return __riscv_vfredusum_vs_f32m1_f32(mul, __riscv_vfmv_v_f_f32m1(0.0f, 2), 2);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t va = wcn_load_vec2_partial(a.v);
-  v128_t vb = wcn_load_vec2_partial(b.v);
-  v128_t mul = wasm_f32x4_mul(va, vb);
-  return wasm_f32x4_extract_lane(mul, 0) + wasm_f32x4_extract_lane(mul, 1);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation - multiply and horizontal add
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 mul = __lsx_vfmul_s(va, vb);
-
-  // Horizontally add to get dot product
-  __m128 high = __lsx_vshuf4i_w(mul, 0x1B);  // 0x1B = 0b00011011 = (2, 3, 0, 1)
-  __m128 sum = __lsx_vfadd_s(mul, high);
-  return __lsx_vfrep2vr_w(sum)[0];
-
-#else
+  // Scalar on every backend - see the note on Vec2 length. Two multiplies and
+  // one add beat the build-a-4-lane-vector-then-reduce sequence, which measured
+  // 2.0x the cost here (SIMD_PERF_BUGS.md PS-07).
   return a.v[0] * b.v[0] + a.v[1] * b.v[1];
-#endif
 }
 
 // add
 void
 WMATH_ADD(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation - using helper functions
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_b = wcn_load_vec2_partial(b.v);
-  __m128 vec_res = _mm_add_ps(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation - using helper functions
-  float32x4_t vec_a = wcn_load_vec2_partial(a.v);
-  float32x4_t vec_b = wcn_load_vec2_partial(b.v);
-  float32x4_t vec_res = vaddq_f32(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation - using helper functions
-  vfloat32m1_t vec_a = wcn_load_vec2_partial(a.v);
-  vfloat32m1_t vec_b = wcn_load_vec2_partial(b.v);
-  vfloat32m1_t vec_res = __riscv_vfadd_vv_f32m1(vec_a, vec_b, 4); // Use full vector length for helper
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t vec_a = wcn_load_vec2_partial(a.v);
-  v128_t vec_b = wcn_load_vec2_partial(b.v);
-  v128_t vec_res = wasm_f32x4_add(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_b = wcn_load_vec2_partial(b.v);
-  __m128 vec_res = __lsx_vfadd_s(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#else
-  // Scalar fallback
-  dst->v[0] = a.v[0] + b.v[0];
-  dst->v[1] = a.v[1] + b.v[1];
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component add
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    // Scalar fallback
+    dst->v[0] = a.v[0] + b.v[0];
+    dst->v[1] = a.v[1] + b.v[1];
 }
 
 // addScaled
 void
 WMATH_ADD_SCALED(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b, const float scale) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  const __m128 v_scale = _mm_set1_ps(scale);
-#if defined(WCN_HAS_FMA)
-  __m128 v_res = wcn_fma_mul_add_ps(vb, v_scale, va);
-#else
-  __m128 v_res = _mm_add_ps(va, _mm_mul_ps(vb, v_scale));
-#endif
-  wcn_store_vec2_partial(dst->v, v_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation
-  float32x4_t va = wcn_load_vec2_partial(a.v);
-  float32x4_t vb = wcn_load_vec2_partial(b.v);
-  float32x4_t vscale = vdupq_n_f32(scale);
-  float32x4_t vres = vmlaq_f32(va, vb, vscale);
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation
-  vfloat32m1_t va = wcn_load_vec2_partial(a.v);
-  vfloat32m1_t vb = wcn_load_vec2_partial(b.v);
-  vfloat32m1_t v_scale = __riscv_vfmv_v_f_f32m1(scale, 4); // Broadcast scale to all lanes
-  vfloat32m1_t scaled_b = __riscv_vfmul_vv_f32m1(vb, v_scale, 4);
-  vfloat32m1_t vres = __riscv_vfadd_vv_f32m1(va, scaled_b, 4);
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t va = wcn_load_vec2_partial(a.v);
-  v128_t vb = wcn_load_vec2_partial(b.v);
-  v128_t v_scale = wasm_f32x4_splat(scale);
-  v128_t scaled_b = wasm_f32x4_mul(vb, v_scale);
-  v128_t vres = wasm_f32x4_add(va, scaled_b);
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 v_scale = __lsx_vldrepl_w(&scale, 0); // Load scale into all lanes
-  __m128 scaled_b = __lsx_vfmul_s(vb, v_scale);
-  __m128 vres = __lsx_vfadd_s(va, scaled_b);
-  wcn_store_vec2_partial(dst->v, vres);
-
-#else
-  // Scalar fallback
-  dst->v[0] = a.v[0] + b.v[0] * scale;
-  dst->v[1] = a.v[1] + b.v[1] * scale;
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component multiply-add
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    // Scalar fallback
+    dst->v[0] = a.v[0] + b.v[0] * scale;
+    dst->v[1] = a.v[1] + b.v[1] * scale;
 }
 
 // sub
 void
 WMATH_SUB(Vec2)(DST_VEC2, WMATH_TYPE(Vec2) a, WMATH_TYPE(Vec2) b) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation - using helper functions
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_b = wcn_load_vec2_partial(b.v);
-  __m128 vec_res = _mm_sub_ps(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation - using helper functions
-  float32x4_t vec_a = wcn_load_vec2_partial(a.v);
-  float32x4_t vec_b = wcn_load_vec2_partial(b.v);
-  float32x4_t vec_res = vsubq_f32(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation - using helper functions
-  vfloat32m1_t vec_a = wcn_load_vec2_partial(a.v);
-  vfloat32m1_t vec_b = wcn_load_vec2_partial(b.v);
-  vfloat32m1_t vec_res = __riscv_vfsub_vv_f32m1(vec_a, vec_b, 4); // Use full vector length for helper
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t vec_a = wcn_load_vec2_partial(a.v);
-  v128_t vec_b = wcn_load_vec2_partial(b.v);
-  v128_t vec_res = wasm_f32x4_sub(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_b = wcn_load_vec2_partial(b.v);
-  __m128 vec_res = __lsx_vfsub_s(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#else
-  // Scalar fallback
-  dst->v[0] = a.v[0] - b.v[0];
-  dst->v[1] = a.v[1] - b.v[1];
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component subtract
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    // Scalar fallback
+    dst->v[0] = a.v[0] - b.v[0];
+    dst->v[1] = a.v[1] - b.v[1];
 }
 
 // angle
@@ -508,8 +269,8 @@ float WMATH_ANGLE(Vec2)(const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) {
   // Calculate magnitudes using SIMD
   vfloat32m1_t va_sq = __riscv_vfmul_vv_f32m1(va, va, 4);
   vfloat32m1_t vb_sq = __riscv_vfmul_vv_f32m1(vb, vb, 4);
-  float mag_1_sq = __riscv_vfredusum_vs_f32m1_f32(va_sq, __riscv_vfmv_v_f_f32m1(0.0f, 4), 4);
-  float mag_2_sq = __riscv_vfredusum_vs_f32m1_f32(vb_sq, __riscv_vfmv_v_f_f32m1(0.0f, 4), 4);
+  float mag_1_sq = wcn_hadd_f32(va_sq);
+  float mag_2_sq = wcn_hadd_f32(vb_sq);
 
   float mag_1 = sqrtf(mag_1_sq);
   float mag_2 = sqrtf(mag_2_sq);
@@ -571,11 +332,11 @@ float WMATH_ANGLE(Vec2)(const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) {
   // Horizontally add to get sum of squares
   __m128 high = __lsx_vshuf4i_w(va_sq, 0x1B);  // 0x1B = 0b00011011 = (2, 3, 0, 1)
   __m128 sum = __lsx_vfadd_s(va_sq, high);
-  float mag_1_sq = __lsx_vfrep2vr_w(sum)[0];
+  float mag_1_sq = wcn_lsx_extract_f(sum, 0);
 
   high = __lsx_vshuf4i_w(vb_sq, 0x1B);  // 0x1B = 0b00011011 = (2, 3, 0, 1)
   sum = __lsx_vfadd_s(vb_sq, high);
-  float mag_2_sq = __lsx_vfrep2vr_w(sum)[0];
+  float mag_2_sq = wcn_lsx_extract_f(sum, 0);
 
   float mag_1 = sqrtf(mag_1_sq);
   float mag_2 = sqrtf(mag_2_sq);
@@ -631,116 +392,20 @@ bool WMATH_EQUALS(Vec2)(const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) {
 void
 WMATH_LERP(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b,
                  const float t) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 vt = _mm_set1_ps(t);
-  __m128 vdiff = _mm_sub_ps(vb, va);
-#if defined(WCN_HAS_FMA)
-  __m128 vres = wcn_fma_mul_add_ps(vdiff, vt, va);
-#else
-  __m128 vres = _mm_add_ps(va, _mm_mul_ps(vdiff, vt));
-#endif
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  float32x4_t va = wcn_load_vec2_partial(a.v);
-  float32x4_t vb = wcn_load_vec2_partial(b.v);
-  float32x4_t vt = vdupq_n_f32(t);
-  float32x4_t vdiff = vsubq_f32(vb, va);
-  float32x4_t vres = vaddq_f32(va, vmulq_f32(vdiff, vt));
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation
-  vfloat32m1_t va = wcn_load_vec2_partial(a.v);
-  vfloat32m1_t vb = wcn_load_vec2_partial(b.v);
-  vfloat32m1_t vt = __riscv_vfmv_v_f_f32m1(t, 4); // Broadcast t to all lanes
-  vfloat32m1_t vdiff = __riscv_vfsub_vv_f32m1(vb, va, 4);
-  vfloat32m1_t vres = __riscv_vfmul_vv_f32m1(vdiff, vt, 4);
-  vres = __riscv_vfadd_vv_f32m1(va, vres, 4);
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t va = wcn_load_vec2_partial(a.v);
-  v128_t vb = wcn_load_vec2_partial(b.v);
-  v128_t vt = wasm_f32x4_splat(t);
-  v128_t vdiff = wasm_f32x4_sub(vb, va);
-  v128_t vres = wasm_f32x4_add(va, wasm_f32x4_mul(vdiff, vt));
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 vt = __lsx_vldrepl_w(&t, 0); // Load t into all lanes
-  __m128 vdiff = __lsx_vfsub_s(vb, va);
-  __m128 vres = __lsx_vfadd_s(va, __lsx_vfmul_s(vdiff, vt));
-  wcn_store_vec2_partial(dst->v, vres);
-
-#else
-  dst->v[0] = a.v[0] + (b.v[0] - a.v[0]) * t;
-  dst->v[1] = a.v[1] + (b.v[1] - a.v[1]) * t;
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component lerp
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    dst->v[0] = a.v[0] + (b.v[0] - a.v[0]) * t;
+    dst->v[1] = a.v[1] + (b.v[1] - a.v[1]) * t;
 }
 
 // Linear Interpolation V
 void
 WMATH_LERP_V(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b,
                    const WMATH_TYPE(Vec2) t) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 vt = wcn_load_vec2_partial(t.v);
-  __m128 vdiff = _mm_sub_ps(vb, va);
-  __m128 vres = _mm_add_ps(va, _mm_mul_ps(vdiff, vt));
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  float32x4_t va = wcn_load_vec2_partial(a.v);
-  float32x4_t vb = wcn_load_vec2_partial(b.v);
-  float32x4_t vt = wcn_load_vec2_partial(t.v);
-  float32x4_t vdiff = vsubq_f32(vb, va);
-  float32x4_t vres = vaddq_f32(va, vmulq_f32(vdiff, vt));
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation
-  vfloat32m1_t va = wcn_load_vec2_partial(a.v);
-  vfloat32m1_t vb = wcn_load_vec2_partial(b.v);
-  vfloat32m1_t vt = wcn_load_vec2_partial(t.v);
-  vfloat32m1_t vdiff = __riscv_vfsub_vv_f32m1(vb, va, 4);
-  vfloat32m1_t vres = __riscv_vfmul_vv_f32m1(vdiff, vt, 4);
-  vres = __riscv_vfadd_vv_f32m1(va, vres, 4);
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t va = wcn_load_vec2_partial(a.v);
-  v128_t vb = wcn_load_vec2_partial(b.v);
-  v128_t vt = wcn_load_vec2_partial(t.v);
-  v128_t vdiff = wasm_f32x4_sub(vb, va);
-  v128_t vres = wasm_f32x4_add(va, wasm_f32x4_mul(vdiff, vt));
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 vt = wcn_load_vec2_partial(t.v);
-  __m128 vdiff = __lsx_vfsub_s(vb, va);
-  __m128 vres = __lsx_vfadd_s(va, __lsx_vfmul_s(vdiff, vt));
-  wcn_store_vec2_partial(dst->v, vres);
-
-#else
-  dst->v[0] = a.v[0] + (b.v[0] - a.v[0]) * t.v[0];
-  dst->v[1] = a.v[1] + (b.v[1] - a.v[1]) * t.v[1];
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component lerp
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    dst->v[0] = a.v[0] + (b.v[0] - a.v[0]) * t.v[0];
+    dst->v[1] = a.v[1] + (b.v[1] - a.v[1]) * t.v[1];
 }
 
 // f max
@@ -840,95 +505,21 @@ WMATH_FMIN(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) {
 // multiplyScalar
 void
 WMATH_MULTIPLY_SCALAR(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const float scalar) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation - using helper functions
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_scalar = _mm_set1_ps(scalar);
-  __m128 vec_res = _mm_mul_ps(vec_a, vec_scalar);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation - using helper functions
-  float32x4_t vec_a = wcn_load_vec2_partial(a.v);
-  float32x4_t vec_scalar = vdupq_n_f32(scalar);
-  float32x4_t vec_res = vmulq_f32(vec_a, vec_scalar);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation - using helper functions
-  vfloat32m1_t vec_a = wcn_load_vec2_partial(a.v);
-  vfloat32m1_t vec_scalar = __riscv_vfmv_v_f_f32m1(scalar, 4); // Broadcast scalar to all lanes
-  vfloat32m1_t vec_res = __riscv_vfmul_vv_f32m1(vec_a, vec_scalar, 4); // Use full vector length for helper
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t vec_a = wcn_load_vec2_partial(a.v);
-  v128_t vec_scalar = wasm_f32x4_splat(scalar);
-  v128_t vec_res = wasm_f32x4_mul(vec_a, vec_scalar);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_scalar = __lsx_vldrepl_w(&scalar, 0); // Load scalar into all lanes
-  __m128 vec_res = __lsx_vfmul_s(vec_a, vec_scalar);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#else
-  // Scalar fallback
-  dst->v[0] = a.v[0] * scalar;
-  dst->v[1] = a.v[1] * scalar;
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component scalar multiply
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    // Scalar fallback
+    dst->v[0] = a.v[0] * scalar;
+    dst->v[1] = a.v[1] * scalar;
 }
 
 // multiply
 void
 WMATH_MULTIPLY(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation - using helper functions
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_b = wcn_load_vec2_partial(b.v);
-  __m128 vec_res = _mm_mul_ps(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation - using helper functions
-  float32x4_t vec_a = wcn_load_vec2_partial(a.v);
-  float32x4_t vec_b = wcn_load_vec2_partial(b.v);
-  float32x4_t vec_res = vmulq_f32(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation - using helper functions
-  vfloat32m1_t vec_a = wcn_load_vec2_partial(a.v);
-  vfloat32m1_t vec_b = wcn_load_vec2_partial(b.v);
-  vfloat32m1_t vec_res = __riscv_vfmul_vv_f32m1(vec_a, vec_b, 4); // Use full vector length for helper
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t vec_a = wcn_load_vec2_partial(a.v);
-  v128_t vec_b = wcn_load_vec2_partial(b.v);
-  v128_t vec_res = wasm_f32x4_mul(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_b = wcn_load_vec2_partial(b.v);
-  __m128 vec_res = __lsx_vfmul_s(vec_a, vec_b);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#else
-  // Scalar fallback
-  dst->v[0] = a.v[0] * b.v[0];
-  dst->v[1] = a.v[1] * b.v[1];
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component multiply
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    // Scalar fallback
+    dst->v[0] = a.v[0] * b.v[0];
+    dst->v[1] = a.v[1] * b.v[1];
 }
 
 // divScalar
@@ -937,215 +528,30 @@ WMATH_MULTIPLY(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) 
  */
 void
 WMATH_DIV_SCALAR(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const float scalar) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation with branchless operations and unified epsilon/abs logic
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_scalar = _mm_set1_ps(scalar);
-
-  // Use explicit abs mask and wcn_math_get_epsilon()
-  const __m128 abs_mask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
-  __m128 vec_zero = _mm_setzero_ps();
-  __m128 vec_epsilon = _mm_set1_ps(wcn_math_get_epsilon());
-  __m128 vec_abs_scalar = _mm_and_ps(vec_scalar, abs_mask);
-  __m128 cmp_mask = _mm_cmplt_ps(vec_abs_scalar, vec_epsilon);
-
-  __m128 vec_div = _mm_div_ps(vec_a, vec_scalar);
-  __m128 vec_res = wcn_select_ps(cmp_mask, vec_zero, vec_div);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // ARM NEON implementation with safety checks
-  float32x4_t vec_a = wcn_load_vec2_partial(a.v);
-  float32x4_t vec_scalar = vdupq_n_f32(scalar);
-  float epsilon = wcn_math_get_epsilon();
-  float32x4_t vec_epsilon = vdupq_n_f32(epsilon);
-
-  // Create absolute value of scalar using bitwise AND with sign bit mask
-  int32x4_t int_scalar = vreinterpretq_s32_f32(vec_scalar);
-  int32x4_t sign_mask = vdupq_n_s32(0x7FFFFFFF); // Mask to clear sign bit
-  int32x4_t abs_int = vandq_s32(int_scalar, sign_mask);
-  float32x4_t vec_abs_scalar = vreinterpretq_f32_s32(abs_int);
-
-  // Compare with epsilon
-  uint32x4_t cmp_mask = vcltq_f32(vec_abs_scalar, vec_epsilon);
-
-  // Perform division
-  float32x4_t vec_div = vdivq_f32(vec_a, vec_scalar);
-  float32x4_t vec_zero = vdupq_n_f32(0.0f);
-
-  // Select result based on comparison (branchless)
-  float32x4_t vec_res = vbslq_f32(cmp_mask, vec_zero, vec_div);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation with safety checks
-  vfloat32m1_t vec_a = wcn_load_vec2_partial(a.v);
-  vfloat32m1_t vec_scalar = __riscv_vfmv_v_f_f32m1(scalar, 4); // Broadcast scalar to all lanes
-  float epsilon = wcn_math_get_epsilon();
-  vfloat32m1_t vec_epsilon = __riscv_vfmv_v_f_f32m1(epsilon, 4);
-
-  // Create absolute value of scalar
-  vint32m1_t int_scalar = __riscv_vreinterpret_v_f32m1_i32m1(vec_scalar);
-  vint32m1_t sign_mask = __riscv_vmv_v_x_i32m1(0x7FFFFFFF, 4); // Mask to clear sign bit
-  vint32m1_t abs_int = __riscv_vand_vv_i32m1(int_scalar, sign_mask, 4);
-  vfloat32m1_t vec_abs_scalar = __riscv_vreinterpret_v_i32m1_f32m1(abs_int);
-
-  // Compare with epsilon
-  vbool32_t cmp_mask = __riscv_vmflt_vv_f32m1_b32(vec_abs_scalar, vec_epsilon, 4);
-
-  // Perform division
-  vfloat32m1_t vec_div = __riscv_vfdiv_vv_f32m1(vec_a, vec_scalar, 4);
-  vfloat32m1_t vec_zero = __riscv_vfmv_v_f_f32m1(0.0f, 4);
-
-  // Select result based on comparison
-  vfloat32m1_t vec_res = __riscv_vmerge_vvm_f32m1(cmp_mask, vec_zero, vec_div, 4); // If cmp_mask is true, use vec_zero; else vec_div
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation with safety checks
-  v128_t vec_a = wcn_load_vec2_partial(a.v);
-  v128_t vec_scalar = wasm_f32x4_splat(scalar);
-  float epsilon = wcn_math_get_epsilon();
-  v128_t vec_epsilon = wasm_f32x4_splat(epsilon);
-
-  // Create absolute value of scalar using the proper WASM SIMD function
-  v128_t vec_abs_scalar = wasm_f32x4_abs(vec_scalar);
-
-  // Compare with epsilon
-  v128_t cmp_mask = wasm_f32x4_lt(vec_abs_scalar, vec_epsilon);
-
-  // Perform division
-  v128_t vec_div = wasm_f32x4_div(vec_a, vec_scalar);
-  v128_t vec_zero = wasm_f32x4_make(0.0f, 0.0f, 0.0f, 0.0f);
-
-  // Select result based on comparison
-  v128_t vec_res = wasm_v128_bitselect(vec_div, vec_zero, cmp_mask); // If mask is 1, select from vec_zero; if mask is 0, select from vec_div
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation with safety checks
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_scalar = __lsx_vldrepl_w(&scalar, 0); // Load scalar into all lanes
-  float epsilon = wcn_math_get_epsilon();
-  __m128 vec_epsilon = __lsx_vldrepl_w(&epsilon, 0);
-
-  // Create absolute value of scalar
-  __m128i int_scalar = __lsx_vreinterpret_v_f32_s32(vec_scalar);
-  __m128i sign_mask = __lsx_vreplgr2vr_w(0x7FFFFFFF); // Mask to clear sign bit
-  __m128i abs_int = __lsx_vand_v_s32(int_scalar, sign_mask);
-  __m128 vec_abs_scalar = __lsx_vreinterpret_v_s32_f32(abs_int);
-
-  // Compare with epsilon
-  __m128 cmp_mask = __lsx_vslt_s(vec_abs_scalar, vec_epsilon);
-
-  // Perform division
-  __m128 vec_div = __lsx_vfdiv_s(vec_a, vec_scalar);
-  __m128 vec_zero = __lsx_vldi(0x0); // Load zero
-
-  // Select result based on comparison (using bitwise operations)
-  __m128 masked_zero = __lsx_vand_v(vec_zero, cmp_mask);
-  __m128 masked_div = __lsx_vandn_v(vec_div, cmp_mask); // vec_div AND NOT cmp_mask
-  __m128 vec_res = __lsx_vor_v(masked_zero, masked_div);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#else
-  // Scalar implementation with branchless operations
-  dst->v[0] = wcn_safe_div_float(a.v[0], scalar);
-  dst->v[1] = wcn_safe_div_float(a.v[1], scalar);
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component scalar divide
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    // Scalar implementation with branchless operations
+    dst->v[0] = wcn_safe_div_float(a.v[0], scalar);
+    dst->v[1] = wcn_safe_div_float(a.v[1], scalar);
 }
 
 // div
 void
 WMATH_DIV(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 vres = _mm_div_ps(va, vb);
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  float32x4_t va = wcn_load_vec2_partial(a.v);
-  float32x4_t vb = wcn_load_vec2_partial(b.v);
-  float32x4_t vres = vdivq_f32(va, vb);
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation - using helper functions
-  vfloat32m1_t va = wcn_load_vec2_partial(a.v);
-  vfloat32m1_t vb = wcn_load_vec2_partial(b.v);
-  vfloat32m1_t vres = __riscv_vfdiv_vv_f32m1(va, vb, 4); // Use full vector length for helper
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t va = wcn_load_vec2_partial(a.v);
-  v128_t vb = wcn_load_vec2_partial(b.v);
-  v128_t vres = wasm_f32x4_div(va, vb);
-  wcn_store_vec2_partial(dst->v, vres);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 vres = __lsx_vfdiv_s(va, vb);
-  wcn_store_vec2_partial(dst->v, vres);
-
-#else
-  dst->v[0] = a.v[0] / b.v[0];
-  dst->v[1] = a.v[1] / b.v[1];
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component divide
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    dst->v[0] = a.v[0] / b.v[0];
+    dst->v[1] = a.v[1] / b.v[1];
 }
 
 // inverse
 void
 WMATH_INVERSE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation - using helper functions
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_one = _mm_set1_ps(1.0f);
-  __m128 vec_res = _mm_div_ps(vec_one, vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation - using helper functions
-  float32x4_t vec_a = wcn_load_vec2_partial(a.v);
-  float32x4_t vec_one = vdupq_n_f32(1.0f);
-  float32x4_t vec_res = vdivq_f32(vec_one, vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation - using helper functions
-  vfloat32m1_t vec_a = wcn_load_vec2_partial(a.v);
-  vfloat32m1_t vec_one = __riscv_vfmv_v_f_f32m1(1.0f, 4); // Broadcast 1.0f to all lanes
-  vfloat32m1_t vec_res = __riscv_vfdiv_vv_f32m1(vec_one, vec_a, 4); // Use full vector length for helper
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t vec_a = wcn_load_vec2_partial(a.v);
-  v128_t vec_one = wasm_f32x4_splat(1.0f);
-  v128_t vec_res = wasm_f32x4_div(vec_one, vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 vec_one = __lsx_vldrepl_w(&(const float){1.0f}, 0); // Load 1.0f into all lanes
-  __m128 vec_res = __lsx_vfdiv_s(vec_a, vec_one);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#else
-  // Scalar fallback with zero division check
-  dst->v[0] = (a.v[0] != 0.0f) ? 1.0f / a.v[0] : 0.0f;
-  dst->v[1] = (a.v[1] != 0.0f) ? 1.0f / a.v[1] : 0.0f;
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component multiply by -1
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    // Scalar fallback with zero division check
+    dst->v[0] = (a.v[0] != 0.0f) ? 1.0f / a.v[0] : 0.0f;
+    dst->v[1] = (a.v[1] != 0.0f) ? 1.0f / a.v[1] : 0.0f;
 }
 
 // cross
@@ -1161,236 +567,49 @@ WMATH_CROSS(Vec2)(DST_VEC3, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) 
 
 // length
 float WMATH_LENGTH(Vec2)(const WMATH_TYPE(Vec2) v) {
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation - using helper function
-  __m128 vec_v = wcn_load_vec2_partial(v.v);
-  __m128 vec_squared = _mm_mul_ps(vec_v, vec_v);
-  float len_sq = _mm_cvtss_f32(wcn_hadd_ps(vec_squared));
-  return sqrtf(len_sq);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation - using helper function
-  float32x4_t vec_v = wcn_load_vec2_partial(v.v);
-  float32x4_t vec_squared = vmulq_f32(vec_v, vec_v);
-  float len_sq = wcn_hadd_f32(vec_squared);
-  return sqrtf(len_sq);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation - multiply and reduce add for 2 elements
-  vfloat32m1_t vec_v = __riscv_vle32_v_f32m1(v.v, 2);
-  vfloat32m1_t vec_squared = __riscv_vfmul_vv_f32m1(vec_v, vec_v, 2);
-  float len_sq = __riscv_vfredusum_vs_f32m1_f32(vec_squared, __riscv_vfmv_v_f_f32m1(0.0f, 2), 2);
-  return sqrtf(len_sq);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t vec_v = wcn_load_vec2_partial(v.v);
-  v128_t vec_squared = wasm_f32x4_mul(vec_v, vec_v);
-  float len_sq = wasm_f32x4_extract_lane(vec_squared, 0) + wasm_f32x4_extract_lane(vec_squared, 1);
-  return sqrtf(len_sq);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation - multiply and horizontal add
-  __m128 vec_v = wcn_load_vec2_partial(v.v);
-  __m128 vec_squared = __lsx_vfmul_s(vec_v, vec_v);
-
-  // Horizontally add to get sum of squares
-  __m128 high = __lsx_vshuf4i_w(vec_squared, 0x1B);  // 0x1B = 0b00011011 = (2, 3, 0, 1)
-  __m128 sum = __lsx_vfadd_s(vec_squared, high);
-  return sqrtf(__lsx_vfrep2vr_w(sum)[0]);
-
-#else
-  // Scalar fallback
+  // Scalar on every backend, deliberately.
+  //
+  // This is a 2-element horizontal reduction: the whole computation is two
+  // multiplies and one add, which the compiler already contracts to a pair of
+  // FMA-able instructions. The SIMD versions had to build a 4-lane vector from
+  // two floats and then reduce it across lanes (movlps + mul + hadd + hadd +
+  // vmovss on SSE, vpaddq twice on NEON), which measured 2.2x SLOWER than this
+  // line (SIMD_PERF_BUGS.md PS-07). Same reasoning applies to length_squared,
+  // dot and distance below.
   return sqrtf(v.v[0] * v.v[0] + v.v[1] * v.v[1]);
-#endif
 }
 
 // lengthSquared
 float WMATH_LENGTH_SQ(Vec2)(const WMATH_TYPE(Vec2) v) {
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation - using helper function
-  __m128 vec_v = wcn_load_vec2_partial(v.v);
-  __m128 vec_squared = _mm_mul_ps(vec_v, vec_v);
-  return _mm_cvtss_f32(wcn_hadd_ps(vec_squared));
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation - using helper function
-  float32x4_t vec_v = wcn_load_vec2_partial(v.v);
-  float32x4_t vec_squared = vmulq_f32(vec_v, vec_v);
-  return wcn_hadd_f32(vec_squared);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation - multiply and reduce add for 2 elements
-  vfloat32m1_t vec_v = __riscv_vle32_v_f32m1(v.v, 2);
-  vfloat32m1_t vec_squared = __riscv_vfmul_vv_f32m1(vec_v, vec_v, 2);
-  return __riscv_vfredusum_vs_f32m1_f32(vec_squared, __riscv_vfmv_v_f_f32m1(0.0f, 2), 2);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t vec_v = wcn_load_vec2_partial(v.v);
-  v128_t vec_squared = wasm_f32x4_mul(vec_v, vec_v);
-  return wasm_f32x4_extract_lane(vec_squared, 0) + wasm_f32x4_extract_lane(vec_squared, 1);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation - multiply and horizontal add
-  __m128 vec_v = wcn_load_vec2_partial(v.v);
-  __m128 vec_squared = __lsx_vfmul_s(vec_v, vec_v);
-
-  // Horizontally add to get sum of squares
-  __m128 high = __lsx_vshuf4i_w(vec_squared, 0x1B);  // 0x1B = 0b00011011 = (2, 3, 0, 1)
-  __m128 sum = __lsx_vfadd_s(vec_squared, high);
-  return __lsx_vfrep2vr_w(sum)[0];
-
-#else
+  /* Scalar on every backend; same reasoning as Vec2_length above. Two
+   multiplies and one add, measured 1.6x faster than the SSE form that had to
+   build a 4-lane vector and reduce across lanes (SIMD_PERF_BUGS.md PS-07). */
   return v.v[0] * v.v[0] + v.v[1] * v.v[1];
-#endif
 }
 
 // distance
 float WMATH_DISTANCE(Vec2)(const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) {
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 diff = _mm_sub_ps(va, vb);
-  __m128 mul = _mm_mul_ps(diff, diff);
-  float sum = _mm_cvtss_f32(wcn_hadd_ps(mul));
-  return sqrtf(sum);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  float32x4_t va = wcn_load_vec2_partial(a.v);
-  float32x4_t vb = wcn_load_vec2_partial(b.v);
-  float32x4_t diff = vsubq_f32(va, vb);
-  float32x4_t mul = vmulq_f32(diff, diff);
-  float sum = wcn_hadd_f32(mul);
-  return sqrtf(sum);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  vfloat32m1_t va = __riscv_vle32_v_f32m1(a.v, 2);
-  vfloat32m1_t vb = __riscv_vle32_v_f32m1(b.v, 2);
-  vfloat32m1_t diff = __riscv_vfsub_vv_f32m1(va, vb, 2);
-  vfloat32m1_t mul = __riscv_vfmul_vv_f32m1(diff, diff, 2);
-  float sum = __riscv_vfredusum_vs_f32m1_f32(mul, __riscv_vfmv_v_f_f32m1(0.0f, 2), 2);
-  return sqrtf(sum);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t va = wcn_load_vec2_partial(a.v);
-  v128_t vb = wcn_load_vec2_partial(b.v);
-  v128_t diff = wasm_f32x4_sub(va, vb);
-  v128_t mul = wasm_f32x4_mul(diff, diff);
-  float sum = wasm_f32x4_extract_lane(mul, 0) + wasm_f32x4_extract_lane(mul, 1);
-  return sqrtf(sum);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 diff = __lsx_vfsub_s(va, vb);
-  __m128 mul = __lsx_vfmul_s(diff, diff);
-
-  // Horizontally add to get sum of squares
-  __m128 high = __lsx_vshuf4i_w(mul, 0x1B);  // 0x1B = 0b00011011 = (2, 3, 0, 1)
-  __m128 sum = __lsx_vfadd_s(mul, high);
-  return sqrtf(__lsx_vfrep2vr_w(sum)[0]);
-
-#else
+  // Scalar on every backend - see the note on Vec2 length (SIMD_PERF_BUGS.md PS-07).
   float dx = a.v[0] - b.v[0];
   float dy = a.v[1] - b.v[1];
   return sqrtf(dx * dx + dy * dy);
-#endif
 }
 
 // distance_squared
 float WMATH_DISTANCE_SQ(Vec2)(const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b) {
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 diff = _mm_sub_ps(va, vb);
-  __m128 mul = _mm_mul_ps(diff, diff);
-  return _mm_cvtss_f32(wcn_hadd_ps(mul));
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  float32x4_t va = wcn_load_vec2_partial(a.v);
-  float32x4_t vb = wcn_load_vec2_partial(b.v);
-  float32x4_t diff = vsubq_f32(va, vb);
-  float32x4_t mul = vmulq_f32(diff, diff);
-  return wcn_hadd_f32(mul);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  vfloat32m1_t va = __riscv_vle32_v_f32m1(a.v, 2);
-  vfloat32m1_t vb = __riscv_vle32_v_f32m1(b.v, 2);
-  vfloat32m1_t diff = __riscv_vfsub_vv_f32m1(va, vb, 2);
-  vfloat32m1_t mul = __riscv_vfmul_vv_f32m1(diff, diff, 2);
-  return __riscv_vfredusum_vs_f32m1_f32(mul, __riscv_vfmv_v_f_f32m1(0.0f, 2), 2);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t va = wcn_load_vec2_partial(a.v);
-  v128_t vb = wcn_load_vec2_partial(b.v);
-  v128_t diff = wasm_f32x4_sub(va, vb);
-  v128_t mul = wasm_f32x4_mul(diff, diff);
-  return wasm_f32x4_extract_lane(mul, 0) + wasm_f32x4_extract_lane(mul, 1);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  __m128 va = wcn_load_vec2_partial(a.v);
-  __m128 vb = wcn_load_vec2_partial(b.v);
-  __m128 diff = __lsx_vfsub_s(va, vb);
-  __m128 mul = __lsx_vfmul_s(diff, diff);
-
-  // Horizontally add to get sum of squares
-  __m128 high = __lsx_vshuf4i_w(mul, 0x1B);  // 0x1B = 0b00011011 = (2, 3, 0, 1)
-  __m128 sum = __lsx_vfadd_s(mul, high);
-  return __lsx_vfrep2vr_w(sum)[0];
-
-#else
   float dx = a.v[0] - b.v[0];
   float dy = a.v[1] - b.v[1];
   return dx * dx + dy * dy;
-#endif
 }
 
 // negate
 void
 WMATH_NEGATE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a) {
-
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // SSE implementation - negate using XOR with sign bit mask
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 sign_mask = _mm_set1_ps(-0.0f); // 0x80000000 for all elements
-  __m128 vec_res = _mm_xor_ps(vec_a, sign_mask);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
-  // NEON implementation - negate using "v n e g q _ f32"
-  float32x4_t vec_a = wcn_load_vec2_partial(a.v);
-  float32x4_t vec_res = vnegq_f32(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-  // RISC-V Vector Extension implementation - negate using fused multiply-add with -1.0f
-  vfloat32m1_t vec_a = __riscv_vle32_v_f32m1(a.v, 2);
-  vfloat32m1_t neg_one = __riscv_vfmv_v_f_f32m1(-1.0f, 2);
-  vfloat32m1_t vec_res = __riscv_vfmul_vv_f32m1(vec_a, neg_one, 2);
-  __riscv_vse32_v_f32m1(dst->v, vec_res, 2);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
-  // WebAssembly SIMD implementation
-  v128_t vec_a = wcn_load_vec2_partial(a.v);
-  v128_t vec_res = wasm_f32x4_neg(vec_a);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
-  // LoongArch LSX implementation - negate using XOR with sign bit mask
-  __m128 vec_a = wcn_load_vec2_partial(a.v);
-  __m128 sign_mask = __lsx_vldrepl_w(&(-0.0f), 0); // Load -0.0f into all lanes
-  __m128 vec_res = __lsx_vxor_v(vec_a, sign_mask);
-  wcn_store_vec2_partial(dst->v, vec_res);
-
-#else
-  // Scalar fallback
-  dst->v[0] = -a.v[0];
-  dst->v[1] = -a.v[1];
-#endif
-
+  // Scalar on every backend - see the note on Vec2 length: per-component sign flip
+  // on two lanes costs more in intrinsics than it saves (SIMD_PERF_BUGS.md PS-07).
+    // Scalar fallback
+    dst->v[0] = -a.v[0];
+    dst->v[1] = -a.v[1];
 }
 
 // random
@@ -1408,18 +627,15 @@ WMATH_NORMALIZE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) v) {
   const float epsilon = wcn_math_get_epsilon();
 
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
-  // Optimized SSE implementation using fast inverse square root
-  __m128 vec_v = wcn_load_vec2_partial(v.v);
-  __m128 vec_squared = _mm_mul_ps(vec_v, vec_v);
-  float len_sq = _mm_cvtss_f32(wcn_hadd_ps(vec_squared));
-
+  // Plain scalar on x86 deliberately (SIMD_PERF_BUGS.md PS-07): for a 2-wide
+  // vector the packed path (movsd load, mulps, hadd, broadcast, movlps store)
+  // measured ~1.7x slower than the six SSE2 scalar ops MSVC emits for this
+  // form anyway. Exact sqrt, matching the original 1/Math.sqrt.
+  float len_sq = v.v[0] * v.v[0] + v.v[1] * v.v[1];
   if (len_sq > epsilon * epsilon) {
-    // Use fast inverse square root for better performance
-    __m128 len_sq_vec = _mm_set_ss(len_sq);
-    __m128 inv_len = wcn_fast_inv_sqrt_ps(len_sq_vec);
-    __m128 inv_len_broadcast = _mm_shuffle_ps(inv_len, inv_len, _MM_SHUFFLE(0, 0, 0, 0));
-    __m128 vec_res = _mm_mul_ps(vec_v, inv_len_broadcast);
-    wcn_store_vec2_partial(dst->v, vec_res);
+    const float inv_len = 1.0f / sqrtf(len_sq);
+    dst->v[0] = v.v[0] * inv_len;
+    dst->v[1] = v.v[1] * inv_len;
   } else {
     dst->v[0] = 0.0f;
     dst->v[1] = 0.0f;
@@ -1432,11 +648,10 @@ WMATH_NORMALIZE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) v) {
   float len_sq = wcn_hadd_f32(vec_squared);
 
   if (len_sq > epsilon * epsilon) {
-    // Use NEON reciprocal square root estimate with Newton-Raphson refinement
+    // Exact reciprocal square root (matches the original's 1/Math.sqrt);
+    // the previous vrsqrte estimate + 1 refinement kept ~6e-7 relative error.
     float32x2_t len_sq_vec = vdup_n_f32(len_sq);
-    float32x2_t inv_len_est = vrsqrte_f32(len_sq_vec);
-    // One Newton-Raphson iteration for better accuracy
-    float32x2_t inv_len = vmul_f32(inv_len_est, vrsqrts_f32(vmul_f32(len_sq_vec, inv_len_est), inv_len_est));
+    float32x2_t inv_len = vdiv_f32(vdup_n_f32(1.0f), vsqrt_f32(len_sq_vec));
     float32x4_t inv_len_broadcast = vcombine_f32(inv_len, inv_len);
     float32x4_t vec_res = vmulq_f32(vec_v, inv_len_broadcast);
     wcn_store_vec2_partial(dst->v, vec_res);
@@ -1449,7 +664,7 @@ WMATH_NORMALIZE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) v) {
   // RISC-V Vector Extension implementation
   vfloat32m1_t vec_v = __riscv_vle32_v_f32m1(v.v, 2);
   vfloat32m1_t vec_squared = __riscv_vfmul_vv_f32m1(vec_v, vec_v, 2);
-  float len_sq = __riscv_vfredusum_vs_f32m1_f32(vec_squared, __riscv_vfmv_v_f_f32m1(0.0f, 2), 2);
+  float len_sq = wcn_hadd_f32(vec_squared);
 
   if (len_sq > epsilon * epsilon) {
     // Calculate inverse square root and multiply
@@ -1486,7 +701,7 @@ WMATH_NORMALIZE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) v) {
   // Horizontally add to get length squared
   __m128 high = __lsx_vshuf4i_w(vec_squared, 0x1B);  // 0x1B = 0b00011011 = (2, 3, 0, 1)
   __m128 sum = __lsx_vfadd_s(vec_squared, high);
-  float len_sq = __lsx_vfrep2vr_w(sum)[0];
+  float len_sq = wcn_lsx_extract_f(sum, 0);
 
   if (len_sq > epsilon * epsilon) {
     // Calculate inverse square root and multiply
@@ -1529,8 +744,8 @@ WMATH_ROTATE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b,
   __m128 sc = _mm_set1_ps(s);
   __m128 cc = _mm_set1_ps(c);
 
-  __m128 rx = _mm_sub_ps(_mm_mul_ps(px, cc), _mm_mul_ps(py, sc));
-  __m128 ry = _mm_add_ps(_mm_mul_ps(px, sc), _mm_mul_ps(py, cc));
+  __m128 rx = wcn_fma_mul_sub_ps(px, cc, _mm_mul_ps(py, sc));
+  __m128 ry = wcn_fma_mul_add_ps(px, sc, _mm_mul_ps(py, cc));
 
   float rx_s = _mm_cvtss_f32(rx);
   float ry_s = _mm_cvtss_f32(ry);
@@ -1550,8 +765,8 @@ WMATH_ROTATE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b,
   float32x4_t py = vdupq_n_f32(vgetq_lane_f32(v, 1));
   float32x4_t sc = vdupq_n_f32(s);
   float32x4_t cc = vdupq_n_f32(c);
-  float32x4_t rx = vsubq_f32(vmulq_f32(px, cc), vmulq_f32(py, sc));
-  float32x4_t ry = vaddq_f32(vmulq_f32(px, sc), vmulq_f32(py, cc));
+  float32x4_t rx = vfmsq_f32(px, cc, vmulq_f32(py, sc));
+  float32x4_t ry = vfmaq_f32(vmulq_f32(py, cc), px, sc);
   float rx_s = vgetq_lane_f32(rx, 0);
   float ry_s = vgetq_lane_f32(ry, 0);
   float32x4_t res = {rx_s + vgetq_lane_f32(vb, 0), ry_s + vgetq_lane_f32(vb, 1),
@@ -1567,7 +782,7 @@ WMATH_ROTATE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b,
   vfloat32m1_t v = __riscv_vfsub_vv_f32m1(va, vb, 4); // [p0, p1, 0, 0] (using helper function)
 
   // Extract the x and y components - use first element and second element
-  float p0 = __riscv_vfmv_f_s_f32m1(v);  // Extract x component (first lane)
+  float p0 = __riscv_vfmv_f_s_f32m1_f32(v);  // Extract x component (first lane)
   float temp[4];
   __riscv_vse32_v_f32m1(temp, v, 4);  // Store vector to temp array
   float p1 = temp[1];  // Extract y component (second lane)
@@ -1581,7 +796,7 @@ WMATH_ROTATE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b,
   vfloat32m1_t ry = __riscv_vfadd_vv_f32m1(__riscv_vfmul_vv_f32m1(px, sc, 4), __riscv_vfmul_vv_f32m1(py, cc, 4), 4);
 
   // Extract the results
-  float rx_s = __riscv_vfmv_f_s_f32m1(rx);
+  float rx_s = __riscv_vfmv_f_s_f32m1_f32(rx);
   float temp2[4];
   __riscv_vse32_v_f32m1(temp2, ry, 4);  // Store ry vector to temp array
   float ry_s = temp2[1];  // Extract result from first lane
@@ -1627,8 +842,8 @@ WMATH_ROTATE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const WMATH_TYPE(Vec2) b,
   __m128 rx = __lsx_vfsub_s(__lsx_vfmul_s(px, cc), __lsx_vfmul_s(py, sc));
   __m128 ry = __lsx_vfadd_s(__lsx_vfmul_s(px, sc), __lsx_vfmul_s(py, cc));
 
-  float rx_s = __lsx_vfrep2vr_w(rx)[0];
-  float ry_s = __lsx_vfrep2vr_w(ry)[0];  // Get from first element as both lanes are the same
+  float rx_s = wcn_lsx_extract_f(rx, 0);
+  float ry_s = wcn_lsx_extract_f(ry, 0);  // Get from first element as both lanes are the same
 
   // Add back center
   dst->v[0] = rx_s + b.v[0];
@@ -1656,10 +871,16 @@ WMATH_SET_LENGTH(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const float length) {
 // truncate
 void
 WMATH_TRUNCATE(Vec2)(DST_VEC2, const WMATH_TYPE(Vec2) a, const float length) {
+  // The original returns from the truncating branch:
+  //   if (length(a) > maxLen) return setLength(a, maxLen, newDst);
+  //   return copy(a, newDst);
+  // Without the else the truncated result was immediately overwritten with
+  // the untruncated input, so truncate() was a no-op copy for every input.
   if (WMATH_LENGTH(Vec2)(a) > length) {
     WMATH_SET_LENGTH(Vec2)(dst, a, length);
+  } else {
+    WMATH_COPY(Vec2)(dst, a);
   }
-  WMATH_COPY(Vec2)(dst, a);
 }
 
 // midpoint

@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 #include "WCN/WCN_PLATFORM_MACROS.h"
+#include <math.h>   // sqrtf/acosf/sinf/cosf/fabsf/floorf used in this header
 #include <stdlib.h>
 #include <string.h> // memcpy/memset used across all modules
 // ========================================================================
@@ -47,7 +48,11 @@ static inline void wcn_aligned_free(void* ptr) {
 
 // SIMD helper functions for x86
 static inline __m128 wcn_load_vec2_partial(const float *v) {
-  return _mm_set_ps(0.0f, 0.0f, v[1], v[0]);
+  // One 8-byte packed load into lane 0-1 (movlps), no 16-byte over-read and
+  // no per-element insert shuffles. The old `_mm_set_ps(0,0,v[1],v[0])` made
+  // MSVC emit two scalar loads plus inserts; measured cost made the SSE
+  // Vec2 kernels slower than the plain scalar ones (SIMD_PERF_BUGS.md PS-07).
+  return _mm_castpd_ps(_mm_load_sd((const double*)v));
 }
 
 // Cross product helper function for x86 SSE
@@ -69,22 +74,30 @@ static inline __m128 wcn_cross_ps(__m128 a, __m128 b) {
 }
 
 static inline void wcn_store_vec2_partial(float *v, const __m128 vec) {
-  float temp[4];
-  _mm_storeu_ps(temp, vec);
-  v[0] = temp[0];
-  v[1] = temp[1];
+  // One packed 8-byte store of lanes 0-1 straight from the register. The old
+  // pattern (16-byte store into a stack scratch, then scalar reloads) pays a
+  // store-forwarding stall for every 4-byte reload (SIMD_PERF_BUGS.md PS-03),
+  // and a 16-byte store would write past float v[2].
+  _mm_storel_pi((__m64*)v, vec);
 }
 
 static inline __m128 wcn_load_vec3_partial(const float *v) {
-  return _mm_set_ps(0.0f, v[2], v[1], v[0]);
+  // 3 instructions, no over-read: movsd loads lanes 0-1 packed, movss loads
+  // lane 2, one shuffle merges -> [v0, v1, v2, 0]. (GCC spells the merge
+  // _mm_movelhps; shuffle_ps(1,0,1,0) is the same single instruction and is
+  // portable to MSVC.)
+  // The old _mm_setr_ps form made MSVC emit per-lane inserts (5-6 moves),
+  // which is what made SSE Vec3 kernels cost more than the scalar path.
+  const __m128 lo = _mm_castpd_ps(_mm_load_sd((const double*)v));
+  const __m128 z = _mm_load_ss(v + 2);
+  return _mm_shuffle_ps(lo, z, _MM_SHUFFLE(1, 0, 1, 0));
 }
 
 static inline void wcn_store_vec3_partial(float *v, const __m128 vec) {
-  float temp[4];
-  _mm_storeu_ps(temp, vec);
-  v[0] = temp[0];
-  v[1] = temp[1];
-  v[2] = temp[2];
+  // Packed 8-byte store (lanes 0-1) + one 4-byte store of lane 2: no scratch
+  // array, and never writes float v[3].
+  _mm_storel_pi((__m64*)v, vec);
+  _mm_store_ss(v + 2, _mm_shuffle_ps(vec, vec, _MM_SHUFFLE(2, 2, 2, 2)));
 }
 
 static inline __m128 wcn_hadd_ps(const __m128 vec) {
@@ -257,6 +270,26 @@ static inline float32x4_t wcn_mat4_get_col(const WMATH_TYPE(Mat4) * mat,
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
 // RISC-V Vector Extension
 #include <riscv_vector.h>
+
+
+/*
+ * Materialise a 4-lane vector from scalar arguments.
+ *
+ * `__riscv_vcreate_v_*` is an internal compiler builtin and is not part of the public RVV
+ * intrinsic API, so these calls did not resolve. The supported route is to store and load.
+ * vl is 4 because this build pins the vector type to 128 bits (riscv_rvv_vector_bits), i.e.
+ * exactly four 32-bit lanes.
+ */
+static inline vfloat32m1_t wcn_rvv_make4_f(float a, float b, float c, float d) {
+  float tmp[4] = {a, b, c, d};
+  return __riscv_vle32_v_f32m1(tmp, 4);
+}
+
+static inline vuint32m1_t wcn_rvv_make4_u(uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
+  uint32_t tmp[4] = {a, b, c, d};
+  return __riscv_vle32_v_u32m1(tmp, 4);
+}
+
 // Helper functions for RISC-V
 static inline vfloat32m1_t wcn_load_vec2_partial(const float *v) {
   float temp[4] = {v[0], v[1], 0.0f, 0.0f};
@@ -276,30 +309,66 @@ static inline void wcn_store_vec3_partial(float *v, vfloat32m1_t vec) {
   __riscv_vse32_v_f32m1(v, vec, 3); // Only store first 3 elements
 }
 
+/*
+ * Lane extraction on RVV. `vfmv.f.s` only reads lane 0; to read lane N the vector is slid down
+ * by N first. The previous code passed the index as a second argument to vfmv.f.s, which does
+ * not take one.
+ */
+/*
+ * Lane extraction when there is no vl in scope. This build pins the vector type to 128 bits
+ * (riscv_rvv_vector_bits in the kernel header), so there are always exactly four 32-bit lanes and
+ * the length is a constant. wcn_rvv_lane takes vl instead, for callers that have one.
+ */
+static inline float wcn_rvv_lane4(vfloat32m1_t v, const size_t i) {
+  return __riscv_vfmv_f_s_f32m1_f32(__riscv_vslidedown_vx_f32m1(v, i, 4));
+}
+
+/*
+ * Insert one scalar into lane i, leaving the other lanes alone.
+ *
+ * RVV has no single-instruction "set lane i" for a runtime i: vfmv.v.f splats and
+ * vfslide1up/down only shift by one position. Storing, poking and reloading is exact for any i
+ * and needs no immediate. These call sites previously invoked vfmv.v.f with an index argument,
+ * which it does not take.
+ */
+static inline vfloat32m1_t wcn_rvv_set_lane(vfloat32m1_t v, const float x, const size_t i,
+                                            const size_t vl) {
+  float tmp[4];
+  __riscv_vse32_v_f32m1(tmp, v, vl);
+  tmp[i] = x;
+  return __riscv_vle32_v_f32m1(tmp, vl);
+}
+
+static inline float wcn_rvv_lane(vfloat32m1_t v, size_t i, size_t vl) {
+  return __riscv_vfmv_f_s_f32m1_f32(__riscv_vslidedown_vx_f32m1(v, i, vl));
+}
+
 static inline float wcn_hadd_f32(vfloat32m1_t vec) {
   // Perform horizontal sum of vector elements
   vfloat32m1_t initial = __riscv_vfmv_v_f_f32m1(0.0f, 4); // broadcast 0.0f to all elements
-  vfloat32m1_t sum = __riscv_vredsum_vs_f32m1_f32m1(vec, initial, 4);
-  return __riscv_vfmv_f_s_f32m1(sum, 0);
+  vfloat32m1_t sum = __riscv_vfredusum_vs_f32m1_f32m1(vec, initial, 4);
+
+  return wcn_rvv_lane(sum, 0, 4);
 }
 
 // RISC-V cross product helper for 3D vectors
+
 static inline vfloat32m1_t wcn_cross_rvv(vfloat32m1_t a, vfloat32m1_t b) {
   // Cross product: a x b = (a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x)
-  float a_vals[4] = {__riscv_vfmv_f_s_f32m1(a, 1), __riscv_vfmv_f_s_f32m1(a, 2),
-                     __riscv_vfmv_f_s_f32m1(a, 0), 0.0f};
+  float a_vals[4] = {wcn_rvv_lane(a, 1, 4), wcn_rvv_lane(a, 2, 4),
+                     wcn_rvv_lane(a, 0, 4), 0.0f};
   vfloat32m1_t a_yzx = __riscv_vle32_v_f32m1(a_vals, 4);
 
-  float b_vals[4] = {__riscv_vfmv_f_s_f32m1(b, 2), __riscv_vfmv_f_s_f32m1(b, 0),
-                     __riscv_vfmv_f_s_f32m1(b, 1), 0.0f};
+  float b_vals[4] = {wcn_rvv_lane(b, 2, 4), wcn_rvv_lane(b, 0, 4),
+                     wcn_rvv_lane(b, 1, 4), 0.0f};
   vfloat32m1_t b_zxy = __riscv_vle32_v_f32m1(b_vals, 4);
 
-  float a_vals2[4] = {__riscv_vfmv_f_s_f32m1(a, 2), __riscv_vfmv_f_s_f32m1(a, 0),
-                      __riscv_vfmv_f_s_f32m1(a, 1), 0.0f};
+  float a_vals2[4] = {wcn_rvv_lane(a, 2, 4), wcn_rvv_lane(a, 0, 4),
+                      wcn_rvv_lane(a, 1, 4), 0.0f};
   vfloat32m1_t a_zxy = __riscv_vle32_v_f32m1(a_vals2, 4);
 
-  float b_vals2[4] = {__riscv_vfmv_f_s_f32m1(b, 1), __riscv_vfmv_f_s_f32m1(b, 2),
-                      __riscv_vfmv_f_s_f32m1(b, 0), 0.0f};
+  float b_vals2[4] = {wcn_rvv_lane(b, 1, 4), wcn_rvv_lane(b, 2, 4),
+                      wcn_rvv_lane(b, 0, 4), 0.0f};
   vfloat32m1_t b_yzx = __riscv_vle32_v_f32m1(b_vals2, 4);
 
   vfloat32m1_t mul1 = __riscv_vfmul_vv_f32m1(a_yzx, b_zxy, 4);
@@ -404,6 +473,36 @@ static inline v128_t wcn_mat4_get_col(const WMATH_TYPE(Mat4) * mat, int col) {
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_LOONGARCH_LSX
 #include <lsxintrin.h>
 
+/*
+ * LSX lane extraction and splat.
+ *
+ * clang's lsxintrin.h provides `__lsx_vpickve2gr_w(__m128, int)`, which yields the raw 32-bit
+ * pattern of one lane, and `__lsx_vldrepl_w(const void*, int)` for load-and-replicate. The
+ * names this file used before (vextractw, vfrep2vr_w, vfmov_s_f, vpickve2gr_w_s, vreplfr2vr_s,
+ * vfrstps_s) appear nowhere in that header.
+ *
+ * The reinterpretation is the whole point: assigning vpickve2gr_w's `int` directly to a `float`
+ * converts numerically (3 -> 3.0f) instead of recovering the float whose bits are 3. That would
+ * compile cleanly and be wrong on every LSX build.
+ */
+static inline float wcn_lsx_extract_f(__m128 v, const int idx) {
+  /*
+   * NOT __lsx_vpickve2gr_w(v, idx): its lane operand must be a compile-time constant (clang:
+   * "argument to '__builtin_lsx_vpickve2gr_w' must be a constant integer"), and callers pass a
+   * runtime index. Storing the vector and indexing the array sidesteps the immediate entirely.
+   * The bit reinterpretation is unnecessary here -- reading the float back from memory IS the
+   * reinterpretation, and it cannot be confused with a numeric int->float conversion.
+   */
+  float lanes[4];
+  __lsx_vst(v, lanes, 0);
+  return lanes[idx];
+}
+
+static inline __m128 wcn_lsx_splat_f(const float x) {
+  /* takes the address of its parameter, so a non-lvalue argument is fine */
+  return (__m128)__lsx_vldrepl_w(&x, 0);
+}
+
 // Helper functions for LoongArch LSX
 static inline __m128 wcn_load_vec2_partial(const float *v) {
   __m128 temp = __lsx_vldrepl_w(v, 0);
@@ -412,8 +511,8 @@ static inline __m128 wcn_load_vec2_partial(const float *v) {
 }
 
 static inline void wcn_store_vec2_partial(float *v, __m128 vec) {
-  v[0] = __lsx_vextractw(vec, 0);
-  v[1] = __lsx_vextractw(vec, 1);
+  v[0] = wcn_lsx_extract_f(vec, 0);
+  v[1] = wcn_lsx_extract_f(vec, 1);
 }
 
 static inline __m128 wcn_load_vec3_partial(const float *v) {
@@ -424,9 +523,9 @@ static inline __m128 wcn_load_vec3_partial(const float *v) {
 }
 
 static inline void wcn_store_vec3_partial(float *v, __m128 vec) {
-  v[0] = __lsx_vextractw(vec, 0);
-  v[1] = __lsx_vextractw(vec, 1);
-  v[2] = __lsx_vextractw(vec, 2);
+  v[0] = wcn_lsx_extract_f(vec, 0);
+  v[1] = wcn_lsx_extract_f(vec, 1);
+  v[2] = wcn_lsx_extract_f(vec, 2);
 }
 
 static inline float wcn_hadd_f32(__m128 vec) {
@@ -434,7 +533,7 @@ static inline float wcn_hadd_f32(__m128 vec) {
   __m128 sums = __lsx_vfadd_s(vec, shuf);
   shuf = __lsx_vshuf4i_w(sums, 0x01);  // Shuffle: [1, 0, x, x]
   sums = __lsx_vfadd_s(sums, shuf);
-  return __lsx_vextractw(sums, 0);
+  return wcn_lsx_extract_f(sums, 0);
 }
 
 // LoongArch cross product helper for 3D vectors
@@ -487,32 +586,6 @@ static inline __m128 wcn_fma_neg_mul_add_ps(const __m128 a, const __m128 b, cons
 }
 #endif
 
-// Missing cross product functions for RISC-V
-#if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
-static inline vfloat32m1_t wcn_cross_rvv(vfloat32m1_t a, vfloat32m1_t b) {
-  // Cross product: a x b = (a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x)
-  float a_vals[4] = {__riscv_vfmv_f_s_f32m1(a, 1), __riscv_vfmv_f_s_f32m1(a, 2),
-                     __riscv_vfmv_f_s_f32m1(a, 0), 0.0f};
-  vfloat32m1_t a_yzx = __riscv_vle32_v_f32m1(a_vals, 4);
-
-  float b_vals[4] = {__riscv_vfmv_f_s_f32m1(b, 2), __riscv_vfmv_f_s_f32m1(b, 0),
-                     __riscv_vfmv_f_s_f32m1(b, 1), 0.0f};
-  vfloat32m1_t b_zxy = __riscv_vle32_v_f32m1(b_vals, 4);
-
-  float a_vals2[4] = {__riscv_vfmv_f_s_f32m1(a, 2), __riscv_vfmv_f_s_f32m1(a, 0),
-                      __riscv_vfmv_f_s_f32m1(a, 1), 0.0f};
-  vfloat32m1_t a_zxy = __riscv_vle32_v_f32m1(a_vals2, 4);
-
-  float b_vals2[4] = {__riscv_vfmv_f_s_f32m1(b, 1), __riscv_vfmv_f_s_f32m1(b, 2),
-                      __riscv_vfmv_f_s_f32m1(b, 0), 0.0f};
-  vfloat32m1_t b_yzx = __riscv_vle32_v_f32m1(b_vals2, 4);
-
-  vfloat32m1_t mul1 = __riscv_vfmul_vv_f32m1(a_yzx, b_zxy, 4);
-  vfloat32m1_t mul2 = __riscv_vfmul_vv_f32m1(a_zxy, b_yzx, 4);
-  return __riscv_vfsub_vv_f32m1(mul1, mul2, 4);
-}
-#endif
-
 // SIMD branchless selection for SSE
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
 static inline __m128 wcn_select_ps(const __m128 condition_mask, const __m128 a, const __m128 b) {
@@ -523,20 +596,14 @@ static inline __m128 wcn_select_ps(const __m128 condition_mask, const __m128 a, 
 
 #endif
 
-// SIMD-optimized fast inverse square root for SSE
+// Inverse square root for SSE: exact sqrt + div.
+// The previous _mm_rsqrt_ps + one Newton-Raphson step left ~6e-7 relative error
+// (enough to fail a 1e-5 comparison on normalize) and did not match the
+// original wgpu-matrix, which computes 1/Math.sqrt(lenSq).
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_X86_64
 static inline __m128 wcn_fast_inv_sqrt_ps(const __m128 x) {
-  // Use sqrt instruction if available (SSE and later)
-  const __m128 approx = _mm_rsqrt_ps(x);
-
-  // One Newton-Phonographs iteration to improve precision
-  // y = approx * (1.5-0.5 * x * approx * approx)
-  __m128 x2 = _mm_mul_ps(x, approx);
-  x2 = _mm_mul_ps(x2, approx);
-  __m128 half = _mm_set1_ps(0.5f);
-  __m128 one_point_five = _mm_set1_ps(1.5f);
-  __m128 correction = _mm_sub_ps(one_point_five, _mm_mul_ps(half, x2));
-  return _mm_mul_ps(approx, correction);
+  const __m128 one = _mm_set1_ps(1.0f);
+  return _mm_div_ps(one, _mm_sqrt_ps(x));
 }
 
 #endif
@@ -609,10 +676,10 @@ static inline __m128 wcn_fast_inv_sqrt_platform(__m128 x) {
 
 #if !defined(WMATH_DISABLE_SIMD) && WCN_HAS_AARCH64
 static inline float32x4_t wcn_fast_inv_sqrt_platform(float32x4_t x) {
-  // Use NEON reciprocal square root estimate with Newton-Raphson refinement
-  float32x4_t est = vrsqrteq_f32(x);
-  // One Newton-Raphson iteration for better accuracy
-  return vmulq_f32(est, vrsqrtsq_f32(vmulq_f32(x, est), est));
+  // Exact sqrt + divide, matching the original's 1/Math.sqrt. The previous
+  // vrsqrteq + one refinement step kept ~6e-7 relative error.
+  const float32x4_t one = vdupq_n_f32(1.0f);
+  return vdivq_f32(one, vsqrtq_f32(x));
 }
 #endif
 
@@ -634,16 +701,15 @@ static inline __m128 wcn_fast_inv_sqrt_platform(__m128 x) {
 }
 #endif
 
-// Scalar fast inverse square root function
+// Scalar inverse square root.
+// This used to be the Quake `0x5f3759df` bit-hack with one Newton-Raphson step:
+// only ~1.5e-3 relative error, so every normalize()/set_length()/truncate()/
+// rotation_to() result was corrupted beyond any reasonable tolerance, and the
+// int/float type punning is strict-aliasing UB in the first place.
+// The original wgpu-matrix computes 1/Math.sqrt; sqrt+div is a hardware
+// instruction here, so exactness costs almost nothing.
 static inline float wcn_fast_inv_sqrt(const float x) {
-  // Fast inverse square root using Quake's famous algorithm
-  float x_half = 0.5f * x;
-  int i = *(int*)&x;          // Evil bit-level hacking
-  i = 0x5f3759df - (i >> 1);  // Magic number and bit shift
-  float y = *(float*)&i;
-  // One Newton-Raphson iteration to improve precision
-  y = y * (1.5f - x_half * y * y);
-  return y;
+  return 1.0f / sqrtf(x);
 }
 
 static inline float wcn_safe_div_float(const float a, const float b) {

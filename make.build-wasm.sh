@@ -45,7 +45,11 @@ echo -e "${GREEN}✓ Emscripten found: $(emcc --version | head -n 1)${NC}"
 echo ""
 
 # Create build directory
-BUILD_DIR="build-wasm"
+# The build dir lives under .local/ (gitignored), so it is no longer a direct child of the
+# repository root: `cmake ..` from there resolves to .local/, which has no CMakeLists.txt.
+# The source directory is therefore derived from this script's own location instead.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_DIR=".local/build-wasm"
 if [ -d "$BUILD_DIR" ]; then
     echo -e "${YELLOW}Cleaning existing build directory...${NC}"
     rm -rf "$BUILD_DIR"
@@ -59,7 +63,7 @@ echo "Build type: $BUILD_TYPE"
 echo ""
 
 # Configure with Emscripten
-emcmake cmake .. \
+emcmake cmake "$SCRIPT_DIR" \
     -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
     -DWCN_BUILD_WASM=ON \
     -DWCN_ENABLE_SIMD=ON
@@ -74,7 +78,7 @@ echo -e "${GREEN}Building WCN for WebAssembly...${NC}"
 echo ""
 
 # Build
-emmake make wcn_wasm -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+emmake make wcn_math_wasm -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}Build failed!${NC}"

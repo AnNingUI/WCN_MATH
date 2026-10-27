@@ -41,7 +41,11 @@ emcc --version | findstr /C:"emcc"
 echo.
 
 REM Create build directory
-set BUILD_DIR=build-wasm
+REM The build dir sits under .local\ (gitignored), so it is no longer a direct child of the
+REM repository root: "cmake .." from there resolves to .local\, which has no CMakeLists.txt.
+REM The source directory comes from this script's own location instead.
+set SCRIPT_DIR=%~dp0
+set BUILD_DIR=.local/build-wasm
 if exist "%BUILD_DIR%" (
     echo Cleaning existing build directory...
     rmdir /s /q "%BUILD_DIR%"
@@ -55,7 +59,7 @@ echo Build type: %BUILD_TYPE%
 echo.
 
 REM Configure with Emscripten
-call emcmake cmake .. ^
+call emcmake cmake "%SCRIPT_DIR%." ^
     -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
     -G "MinGW Makefiles"
 

@@ -13,19 +13,14 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # 收集源文件
+# 只有一套实现：DST（destination-out-param）模式。
+# 旧的 src/no_dst（return-by-value）分支与 WCN_Math.h 的 WCN_USE_DST_MODE
+# 双声明已移除 —— 两者数学相同、符号名相同但调用约定不同，同时存在会静默
+# 链接成功再在运行时破坏栈。
 file(GLOB MATH_COMMON_SOURCES "src/common/*.c")
-file(GLOB MATH_NO_DST_SOURCES "src/no_dst/*.c")
 file(GLOB MATH_DST_SOURCES "src/dst/*.c")
 
-# 合并所有源文件
-option(WCN_MATH_IS_DST "Use Dst mode" ON)
-if(WCN_MATH_IS_DST)
-    message("    USE DST MODE")
-    set(ALL_SOURCES ${MATH_COMMON_SOURCES} ${MATH_DST_SOURCES})
-else()
-    message("    USE NO DST MODE")
-    set(ALL_SOURCES ${MATH_COMMON_SOURCES} ${MATH_NO_DST_SOURCES})
-endif()
+set(ALL_SOURCES ${MATH_COMMON_SOURCES} ${MATH_DST_SOURCES})
 
 # ===============================
 # 创建静态库
@@ -63,8 +58,19 @@ option(WCN_MATH_ENABLE_SSE3 "Enable SSE3 instructions" ON)
 option(WCN_MATH_ENABLE_SSSE3 "Enable SSSE3 instructions" ON)
 option(WCN_MATH_ENABLE_SSE41 "Enable SSE4.1 instructions" ON)
 option(WCN_MATH_ENABLE_SSE42 "Enable SSE4.2 instructions" ON)
-option(WCN_MATH_ENABLE_AVX "Enable AVX instructions" ON)
-option(WCN_MATH_ENABLE_AVX2 "Enable AVX2 instructions" ON)
+# AVX/AVX2 default OFF: the sources contain no AVX intrinsics, but on MSVC
+# /arch:AVX+ rewrites every 128-bit SSE intrinsic into VEX/ymm code and adds
+# vzeroupper to each function (42 of them). Measured: 16 kernels >25% slower
+# than the SSE build, Vec2_zero 3.92x slower (store-forwarding stall), and
+# callers built without /arch:AVX2 pay ~10% on ISA mismatch. See
+# SIMD_PERF_BUGS.md P-02/PS-02/PS-03/PS-06. Turn these ON only if you also
+# add genuine 256-bit paths.
+option(WCN_MATH_ENABLE_AVX "Enable AVX instructions" OFF)
+option(WCN_MATH_ENABLE_AVX2 "Enable AVX2 instructions" OFF)
+# AVX-512 variant. Worth enabling even though the kernels are 128-bit: with
+# AVX512VL the XMM register file goes from 16 to 32, which removed 4 spills and
+# 22 instructions from a 20-live-vector test function at zero source cost.
+option(WCN_MATH_ENABLE_AVX512 "Enable AVX-512 (gives 32 XMM registers)" OFF)
 option(WCN_MATH_ENABLE_FMA "Enable FMA instructions" ON)
 option(WCN_MATH_ENABLE_NEON "Enable NEON instructions" ON)
 
@@ -259,9 +265,14 @@ if(EMSCRIPTEN OR WCN_MATH_BUILD_WASM)
         "src/dst/wcn_math_vec2.c"
         "src/dst/wcn_math_vec2xn.c"
         "src/dst/wcn_math_vec3.c"
+        "src/dst/wcn_math_vec3xn.c"   # SoA Vec3xN: absent before, so its operators were not linked
         "src/dst/wcn_math_vec4.c"
         "src/dst/wcn_math_vec4xn.c"
+        "src/dst/wcn_math_quatxn.c"   # SoA QuatxN
+        "src/dst/wcn_math_mat3xn.c"   # SoA Mat3xN
+        "src/dst/wcn_math_mat4xn.c"   # SoA Mat4xN
         "src/dst/wcn_math_wasm.c"
+        "src/dst/wcn_math_soa_wasm.c" # generated SoA export layer (plane arrays + count)
     )
 
     add_executable(wcn_math_wasm ${WASM_SOURCES})

@@ -191,6 +191,12 @@
 
 #define T$(WCN_Math_TYPE) WMATH_TYPE(WCN_Math_TYPE)
 
+// Compound-literal initialiser for the public types.
+// Lives here (next to T$) rather than in WCN_Math.h so it survives the
+// removal of the return-by-value API surface, which is where it used to be
+// declared and which B.c still relies on.
+#define INIT$(WCN_Math_TYPE, ...) (WMATH_TYPE(WCN_Math_TYPE)){ __VA_ARGS__ }
+
 // BEGIN Utils
 
 #define WMATH_DEG2RED(degrees) (degrees * 0.017453292519943295f)

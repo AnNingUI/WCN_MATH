@@ -12,6 +12,9 @@ cmake-build-debug
 .DS_Store
 DS_Store
 *.exe
+*.obj
+*.pdb
+*.ilk
 
 compile_commands.json
 
@@ -24,3 +27,5 @@ compile_commands.json
 
 build_*
 .ace-tool/
+.todo_work/
+.local/

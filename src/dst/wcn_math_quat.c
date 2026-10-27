@@ -1,3 +1,39 @@
+/*
+ * ISA width policy for this file (see SIMD_PERF_BUGS.md, "ISA width measurement")
+ * ---------------------------------------------------------------------------
+ * Quat kernels: four floats, one SSE register.
+ *
+ * AVX-512 is still the first choice for a build, for a different reason than width:
+ * with AVX512VL the architectural XMM count doubles from 16 to 32 and mask
+ * registers appear, so this same 128-bit code compiles with far fewer spills.
+ * Measured over the whole library at /arch:AVX2 vs /arch:AVX512:
+ *     instructions -3.9% overall (mat3 -7.8%, mat4 -6.4%, other -4.9%),
+ *     stack accesses 828 -> 708 (-14%),
+ *     wcn_math_Mat4_inverse 107 ins / 22 stack -> 80 ins / 4 stack.
+ * That is why the ladder AVX512 > AVX2 > FMA+SSE > SSE is realised as build
+ * variants (tools/build_libs_avx512.bat, CMake WCN_MATH_ENABLE_AVX512) rather than
+ * as additional #if branches in this file: there is no 128-bit-to-512-bit rewrite
+ * to write, only a better register budget.
+ *
+ * The functions here branch on WCN_HAS_X86_64 / AARCH64 / WASM_SIMD /
+ * RISCV_VECTOR / LOONGARCH_LSX and use 128-bit vectors in every case. That is a
+ * measured decision, not an omission.
+ *
+ * A single Vec/Mat/Quat operation carries four floats of live data, which is one
+ * 128-bit register. Measured on this machine:
+ *
+ *     4-float op        SSE 0.800 ns   AVX(256) 0.750 ns   -6% (in the noise)
+ *     RGBA->SoA (N px)  SSE 0.51 ns/px AVX2     0.33 ns/px  1.55x
+ *
+ * The 256-bit form only pays when the work grows with input size, which happens in
+ * the image conversion loops and nowhere here. Widening these functions would also
+ * add a vzeroupper transition at every call boundary and pull the core onto the
+ * AVX frequency curve for no arithmetic gain.
+ *
+ * Functions whose scalar bodies are deliberate (no SIMD branch at all) carry their
+ * own reason next to the body.
+ */
+
 #include "WCN/WCN_MATH_DST.h"
 #include "../common/wcn_math_internal.h"
 #include <string.h>
@@ -71,9 +107,10 @@ float WMATH_DOT(Quat)(const WMATH_TYPE(Quat) a, const WMATH_TYPE(Quat) b) {
     __m128 vec_a = __lsx_vld(a.v, 0);
     __m128 vec_b = __lsx_vld(b.v, 0);
     __m128 vec_mul = __lsx_vfmul_s(vec_a, vec_b);
-    __m128 sum1 = __lsx_vfadd_s(__lsx_vpickve2gr_w(vec_mul, 0), __lsx_vpickve2gr_w(vec_mul, 1));
-    __m128 sum2 = __lsx_vfadd_s(__lsx_vpickve2gr_w(vec_mul, 2), __lsx_vpickve2gr_w(vec_mul, 3));
-    return __lsx_vfadd_s(sum1, sum2);
+    /* Sum the four lanes as floats. vpickve2gr_w yields an int, so feeding it to vfadd_s was a
+       type error and not a horizontal add; this function returns float. */
+    return wcn_lsx_extract_f(vec_mul, 0) + wcn_lsx_extract_f(vec_mul, 1) +
+           wcn_lsx_extract_f(vec_mul, 2) + wcn_lsx_extract_f(vec_mul, 3);
 
 #else
     return a.v[0] * b.v[0] + a.v[1] * b.v[1] + a.v[2] * b.v[2] + a.v[3] * b.v[3];
@@ -90,7 +127,7 @@ void WMATH_LERP(Quat)(DST_QUAT, const WMATH_TYPE(Quat) a, const WMATH_TYPE(Quat)
 #if defined(WCN_HAS_FMA)
     __m128 vres = wcn_fma_mul_add_ps(vdiff, vt, va);
 #else
-    __m128 vres = _mm_add_ps(va, _mm_mul_ps(vdiff, vt));
+    __m128 vres = wcn_fma_mul_add_ps(vdiff, vt, va);
 #endif
     _mm_storeu_ps(dst->v, vres);
 
@@ -99,7 +136,7 @@ void WMATH_LERP(Quat)(DST_QUAT, const WMATH_TYPE(Quat) a, const WMATH_TYPE(Quat)
     float32x4_t vb = vld1q_f32(b.v);
     float32x4_t vt = vdupq_n_f32(t);
     float32x4_t vdiff = vsubq_f32(vb, va);
-    float32x4_t vres = vaddq_f32(va, vmulq_f32(vdiff, vt));
+    float32x4_t vres = vfmaq_f32(va, vdiff, vt);
     vst1q_f32(dst->v, vres);
 
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_WASM_SIMD
@@ -168,7 +205,7 @@ void WMATH_CALL(Quat, slerp)(DST_QUAT, const WMATH_TYPE(Quat) a, const WMATH_TYP
 #if defined(WCN_HAS_FMA)
         __m128 vres = wcn_fma_mul_add_ps(vb, vscale_1, _mm_mul_ps(va, vscale_0));
 #else
-        __m128 vres = _mm_add_ps(_mm_mul_ps(va, vscale_0), _mm_mul_ps(vb, vscale_1));
+        __m128 vres = wcn_fma_mul_add_ps(va, vscale_0, _mm_mul_ps(vb, vscale_1));
 #endif
         _mm_storeu_ps(dst->v, vres);
     } else {
@@ -180,7 +217,7 @@ void WMATH_CALL(Quat, slerp)(DST_QUAT, const WMATH_TYPE(Quat) a, const WMATH_TYP
 #if defined(WCN_HAS_FMA)
         __m128 vres = wcn_fma_mul_add_ps(vb_orig, vscale_1, _mm_mul_ps(va, vscale_0));
 #else
-        __m128 vres = _mm_add_ps(_mm_mul_ps(va, vscale_0), _mm_mul_ps(vb_orig, vscale_1));
+        __m128 vres = wcn_fma_mul_add_ps(va, vscale_0, _mm_mul_ps(vb_orig, vscale_1));
 #endif
         _mm_storeu_ps(dst->v, vres);
     }
@@ -213,7 +250,7 @@ void WMATH_CALL(Quat, slerp)(DST_QUAT, const WMATH_TYPE(Quat) a, const WMATH_TYP
 
         float32x4_t vscale_0 = vdupq_n_f32(scale_0);
         float32x4_t vscale_1 = vdupq_n_f32(scale_1);
-        float32x4_t vres = vaddq_f32(vmulq_f32(va, vscale_0), vmulq_f32(vb, vscale_1));
+        float32x4_t vres = vfmaq_f32(vmulq_f32(vb, vscale_1), va, vscale_0);
         vst1q_f32(dst->v, vres);
     } else {
         float scale_0 = 1.0f - t;
@@ -221,7 +258,7 @@ void WMATH_CALL(Quat, slerp)(DST_QUAT, const WMATH_TYPE(Quat) a, const WMATH_TYP
 
         float32x4_t vscale_0 = vdupq_n_f32(scale_0);
         float32x4_t vscale_1 = vdupq_n_f32(scale_1);
-        float32x4_t vres = vaddq_f32(vmulq_f32(va, vscale_0), vmulq_f32(vb_orig, vscale_1));
+        float32x4_t vres = vfmaq_f32(vmulq_f32(vb_orig, vscale_1), va, vscale_0);
         vst1q_f32(dst->v, vres);
     }
 
@@ -311,7 +348,7 @@ void WMATH_CALL(Quat, slerp)(DST_QUAT, const WMATH_TYPE(Quat) a, const WMATH_TYP
     __m128 mul = __lsx_vfmul_s(va, vb);
     __m128 dot =
         __lsx_vfadd_s(__lsx_vfadd_s(mul, __lsx_vshuf4i_w(mul, 0xB1)), __lsx_vshuf4i_w(mul, 0x1B));
-    float cosOmega = __lsx_vpickve2gr_w_s(dot, 0);
+    float cosOmega = wcn_lsx_extract_f(dot, 0);
 
     __m128 vb_orig = vb;
     if (cosOmega < 0) {
@@ -430,7 +467,7 @@ float WMATH_LENGTH(Quat)(const WMATH_TYPE(Quat) a) {
     __m128 vec_squared = __lsx_vfmul_s(vec_a, vec_a);
     __m128 sum = __lsx_vfadd_s(__lsx_vfadd_s(vec_squared, __lsx_vshuf4i_w(vec_squared, 0xB1)),
                                __lsx_vshuf4i_w(vec_squared, 0x1B));
-    float len_sq = __lsx_vpickve2gr_w_s(sum, 0);
+    float len_sq = wcn_lsx_extract_f(sum, 0);
     return sqrtf(len_sq);
 
 #else
@@ -521,7 +558,7 @@ void WMATH_NORMALIZE(Quat)(DST_QUAT, const WMATH_TYPE(Quat) a) {
 
     __m128 sum = __lsx_vfadd_s(__lsx_vfadd_s(vec_squared, __lsx_vshuf4i_w(vec_squared, 0xB1)),
                                __lsx_vshuf4i_w(vec_squared, 0x1B));
-    float len_sq = __lsx_vpickve2gr_w_s(sum, 0);
+    float len_sq = wcn_lsx_extract_f(sum, 0);
 
     if (len_sq > epsilon * epsilon) {
         __m128 vec_len_sq = __lsx_vldrepl_w(&len_sq, 0);
@@ -557,8 +594,11 @@ bool WMATH_EQUALS(Quat)(const WMATH_TYPE(Quat) a, const WMATH_TYPE(Quat) b) {
 }
 
 float WMATH_ANGLE(Quat)(const WMATH_TYPE(Quat) a, const WMATH_TYPE(Quat) b) {
+    // The original is Math.acos(2 * d * d - 1); the port dropped the second
+    // factor of d, so this returned acos of a different quantity for every
+    // input except the degenerate d in {0, 1}.
     const float cosOmega = WMATH_DOT(Quat)(a, b);
-    return acosf(2.0f * cosOmega - 1.0f);
+    return acosf(2.0f * cosOmega * cosOmega - 1.0f);
 }
 
 void WMATH_CALL(Quat, rotation_to)(DST_QUAT, const WMATH_TYPE(Vec3) a_unit,
@@ -604,7 +644,7 @@ void WMATH_MULTIPLY(Quat)(DST_QUAT, const WMATH_TYPE(Quat) a, const WMATH_TYPE(Q
     __m128 b_yzx = _mm_shuffle_ps(b_vec, b_vec, _MM_SHUFFLE(3, 0, 2, 1));
     __m128 b_zxy = _mm_shuffle_ps(b_vec, b_vec, _MM_SHUFFLE(3, 1, 0, 2));
 
-    __m128 cross = _mm_sub_ps(_mm_mul_ps(a_yzx, b_zxy), _mm_mul_ps(a_zxy, b_yzx));
+    __m128 cross = wcn_fma_mul_sub_ps(a_yzx, b_zxy, _mm_mul_ps(a_zxy, b_yzx));
 
     __m128 t1 = _mm_mul_ps(aw_vec, b_vec);
     __m128 t2 = _mm_mul_ps(bw_vec, a_vec);
@@ -640,7 +680,7 @@ void WMATH_MULTIPLY(Quat)(DST_QUAT, const WMATH_TYPE(Quat) a, const WMATH_TYPE(Q
     float32x4_t b_yzx = vextq_f32(b_vec, b_vec, 1);
     float32x4_t b_zxy = vextq_f32(b_vec, b_vec, 2);
 
-    float32x4_t cross = vsubq_f32(vmulq_f32(a_yzx, b_zxy), vmulq_f32(a_zxy, b_yzx));
+    float32x4_t cross = vfmsq_f32(a_yzx, b_zxy, vmulq_f32(a_zxy, b_yzx));
 
     float32x4_t aw_vec = vdupq_n_f32(a.v[3]);
     float32x4_t bw_vec = vdupq_n_f32(b.v[3]);
@@ -753,7 +793,7 @@ void WMATH_MULTIPLY(Quat)(DST_QUAT, const WMATH_TYPE(Quat) a, const WMATH_TYPE(Q
     __m128 mul = __lsx_vfmul_s(a_vec, b_vec);
     __m128 sum1 = __lsx_vfadd_s(mul, __lsx_vshuf4i_w(mul, 0xB1));
     __m128 sum2 = __lsx_vfadd_s(sum1, __lsx_vshuf4i_w(sum1, 0x1B));
-    float dot_xyz = __lsx_vpickve2gr_w_s(sum2, 0) - a.v[3] * b.v[3];
+    float dot_xyz = wcn_lsx_extract_f(sum2, 0) - a.v[3] * b.v[3];
 
     float w_scalar = a.v[3] * b.v[3] - dot_xyz;
 
@@ -965,8 +1005,13 @@ void WMATH_INVERSE(Quat)(DST_QUAT, const WMATH_TYPE(Quat) q) {
     const float invDot = dot ? 1.0f / dot : 0.0f;
     vfloat32m1_t vec_invDot = __riscv_vfmv_v_f_f32m1(invDot, vl);
 
-    vfloat32m1_t sign_mask = __riscv_vfmv_v_f_f32m1(-0.0f, vl);
-    sign_mask = __riscv_vslide1down_vx_f32m1(sign_mask, 0.0f, 3, vl);
+    /*
+     * Conjugation negates y, z and w but not x, so the sign operand is [+0, -0, -0, -0].
+     * Written out rather than derived by sliding: the previous code used vslide1down, and
+     * starting from all -0.0 that yields [-,-,-,+], which negates x and leaves w -- the exact
+     * opposite of the required pattern. That intrinsic does not exist either.
+     */
+    const vfloat32m1_t sign_mask = wcn_rvv_make4_f(0.0f, -0.0f, -0.0f, -0.0f);
     vfloat32m1_t vec_conj = __riscv_vfsgnjn_vv_f32m1(vec_q, sign_mask, vl);
 
     vfloat32m1_t vec_res = __riscv_vfmul_vv_f32m1(vec_conj, vec_invDot, vl);
@@ -978,7 +1023,7 @@ void WMATH_INVERSE(Quat)(DST_QUAT, const WMATH_TYPE(Quat) q) {
 
     __m128 sum = __lsx_vfadd_s(__lsx_vfadd_s(vec_sq, __lsx_vshuf4i_w(vec_sq, 0xB1)),
                                __lsx_vshuf4i_w(vec_sq, 0x1B));
-    float dot = __lsx_vpickve2gr_w_s(sum, 0);
+    float dot = wcn_lsx_extract_f(sum, 0);
 
     const float invDot = dot ? 1.0f / dot : 0.0f;
     __m128 vec_invDot = __lsx_vldrepl_w(&invDot, 0);
@@ -1026,8 +1071,13 @@ void WMATH_CALL(Quat, conjugate)(DST_QUAT, const WMATH_TYPE(Quat) q) {
 #elif !defined(WMATH_DISABLE_SIMD) && WCN_HAS_RISCV_VECTOR
     size_t vl = __riscv_vsetvl_e32m1(4);
     vfloat32m1_t vec_q = __riscv_vle32_v_f32m1(q.v, vl);
-    vfloat32m1_t sign_mask = __riscv_vfmv_v_f_f32m1(-0.0f, vl);
-    sign_mask = __riscv_vslide1down_vx_f32m1(sign_mask, 0.0f, 3, vl);
+    /*
+     * Conjugation negates y, z and w but not x, so the sign operand is [+0, -0, -0, -0].
+     * Written out rather than derived by sliding: the previous code used vslide1down, and
+     * starting from all -0.0 that yields [-,-,-,+], which negates x and leaves w -- the exact
+     * opposite of the required pattern. That intrinsic does not exist either.
+     */
+    const vfloat32m1_t sign_mask = wcn_rvv_make4_f(0.0f, -0.0f, -0.0f, -0.0f);
     vfloat32m1_t vec_res = __riscv_vfsgnjn_vv_f32m1(vec_q, sign_mask, vl);
     __riscv_vse32_v_f32m1(dst->v, vec_res, vl);
 

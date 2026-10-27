@@ -72,18 +72,62 @@
 #define WCN_HAS_FMA 0
 #endif
 
-// AVX detection
-#if defined(__AVX__)
+// AVX detection.
+//
+// Two sources: the compiler's own feature macro, and the build system's
+// WCN_ENABLE_AVX/WCN_ENABLE_AVX2 switches. The latter matter because the library
+// is normally built without /arch:AVX*: the sources are meant to opt in per file
+// via these defines, and a build that passes /arch:AVX2 does not always set
+// __AVX2__ on every compiler (MSVC's /arch:AVX2 does, but the CMake option path
+// uses the defines). Accepting both keeps one spelling honest.
+#if defined(__AVX__) || defined(WCN_ENABLE_AVX) || defined(WCN_ENABLE_AVX2)
 #ifndef WCN_HAS_AVX
 #define WCN_HAS_AVX 1
 #endif
 #endif
 
-// AVX2 detection
-#if defined(__AVX2__)
+#if defined(__AVX2__) || defined(WCN_ENABLE_AVX2)
 #ifndef WCN_HAS_AVX2
 #define WCN_HAS_AVX2 1
 #endif
+#endif
+
+// AVX-512 detection.
+//
+// WCN_HAS_AVX512 gates the widest branch of the x86 dispatch ladder and is set
+// only when the whole set of sub-features the 512-bit code paths actually use is
+// present, not merely __AVX512F__:
+//   F   - the 512-bit float arithmetic itself
+//   DQ  - 64-bit lane logic, used by the mask/pack sequences in image.c
+//   BW  - byte/word lane shifts, used by the RGBA packing kernels
+//   VL  - 128/256-bit forms of the same instructions, needed for the narrow tail
+// Passing -mavx512f alone without BW/DQ would leave those helpers unavailable, so
+// requiring all four keeps a single macro honest.
+#if (defined(__AVX512F__) && defined(__AVX512DQ__) && defined(__AVX512BW__) && \
+     defined(__AVX512VL__)) ||                                                      \
+    defined(WCN_ENABLE_AVX512)
+#ifndef WCN_HAS_AVX512
+#define WCN_HAS_AVX512 1
+#endif
+#endif
+
+#ifndef WCN_HAS_AVX512
+#define WCN_HAS_AVX512 0
+#endif
+
+// Precedence helpers: exactly one of these is 1 for a given build, and they exist
+// so a function can express "use the widest available x86 path" as a chain of
+// #elif without repeating the feature tests.
+#if WCN_HAS_AVX512
+#define WCN_X86_TIER 4
+#elif defined(WCN_HAS_AVX2)
+#define WCN_X86_TIER 3
+#elif defined(WCN_HAS_AVX)
+#define WCN_X86_TIER 2
+#elif WCN_HAS_FMA
+#define WCN_X86_TIER 1
+#else
+#define WCN_X86_TIER 0
 #endif
 
 // NEON detection (ARM)
